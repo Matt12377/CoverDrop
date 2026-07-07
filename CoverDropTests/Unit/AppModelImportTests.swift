@@ -385,6 +385,88 @@ struct AppModelImportTests {
         }
     }
 
+    @Test("保存时专辑目录不存在会提示未找到专辑")
+    func savingCoverReportsMissingAlbumWhenAlbumFolderDisappears() async throws {
+        try await withTemporaryDirectory { root in
+            let albumFolder = root.appendingPathComponent("Artist/Album", isDirectory: true)
+            let sourceURL = root.appendingPathComponent("source.png")
+            try FileManager.default.createDirectory(at: albumFolder, withIntermediateDirectories: true)
+            try writeValidPNG(to: sourceURL)
+            let album = makeAlbum(folderURL: albumFolder, albumName: "Album")
+            let writer = CountingCoverImageWriter()
+            let appModel = await makeScannedAppModel(
+                root: root,
+                albums: [album],
+                coverImageWriter: writer
+            )
+
+            appModel.stageCoverImage(sourceURL, forAlbumID: album.id)
+            try FileManager.default.removeItem(at: albumFolder)
+            let didWrite = await appModel.savePendingCoverImage(forAlbumID: album.id)
+
+            #expect(!didWrite)
+            #expect(appModel.errorMessage?.contains("未找到专辑") == true)
+            #expect(appModel.pendingCoverURL(for: album.id) == sourceURL)
+            #expect(await writer.writeCount() == 0)
+        }
+    }
+
+    @Test("检查到专辑目录已删除时会从当前封面墙移除")
+    func missingAlbumFolderCheckRemovesAlbumFromCurrentScanResult() async throws {
+        try await withTemporaryDirectory { root in
+            let removedFolder = root.appendingPathComponent("Artist/Removed", isDirectory: true)
+            let keptFolder = root.appendingPathComponent("Artist/Kept", isDirectory: true)
+            try FileManager.default.createDirectory(at: removedFolder, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: keptFolder, withIntermediateDirectories: true)
+            let removedAlbum = makeAlbum(folderURL: removedFolder, albumName: "Removed")
+            let keptAlbum = makeAlbum(folderURL: keptFolder, albumName: "Kept")
+            let appModel = await makeScannedAppModel(root: root, albums: [removedAlbum, keptAlbum])
+
+            try FileManager.default.removeItem(at: removedFolder)
+            let didRemove = appModel.removeAlbumIfFolderMissing(albumID: removedAlbum.id)
+
+            #expect(didRemove)
+            #expect(appModel.albumInSelectedLibrary(id: removedAlbum.id) == nil)
+            #expect(appModel.albumInSelectedLibrary(id: keptAlbum.id) != nil)
+            #expect(appModel.scanResultForSelectedLibrary?.albums.map(\.id) == [keptAlbum.id])
+        }
+    }
+
+    @Test("专辑目录仍存在时检查不会误删")
+    func existingAlbumFolderCheckDoesNotRemoveAlbum() async throws {
+        try await withTemporaryDirectory { root in
+            let albumFolder = root.appendingPathComponent("Artist/Album", isDirectory: true)
+            try FileManager.default.createDirectory(at: albumFolder, withIntermediateDirectories: true)
+            let album = makeAlbum(folderURL: albumFolder, albumName: "Album")
+            let appModel = await makeScannedAppModel(root: root, albums: [album])
+
+            let didRemove = appModel.removeAlbumIfFolderMissing(albumID: album.id)
+
+            #expect(!didRemove)
+            #expect(appModel.albumInSelectedLibrary(id: album.id) == album)
+            #expect(appModel.scanResultForSelectedLibrary?.albums.map(\.id) == [album.id])
+        }
+    }
+
+    @Test("移除已删除专辑时会清掉待保存封面")
+    func missingAlbumFolderCheckClearsPendingCover() async throws {
+        try await withTemporaryDirectory { root in
+            let albumFolder = root.appendingPathComponent("Artist/Album", isDirectory: true)
+            let sourceURL = root.appendingPathComponent("source.png")
+            try FileManager.default.createDirectory(at: albumFolder, withIntermediateDirectories: true)
+            try writeValidPNG(to: sourceURL)
+            let album = makeAlbum(folderURL: albumFolder, albumName: "Album")
+            let appModel = await makeScannedAppModel(root: root, albums: [album])
+
+            appModel.stageCoverImage(sourceURL, forAlbumID: album.id)
+            try FileManager.default.removeItem(at: albumFolder)
+            let didRemove = appModel.removeAlbumIfFolderMissing(albumID: album.id)
+
+            #expect(didRemove)
+            #expect(appModel.pendingCoverURL(for: album.id) == nil)
+        }
+    }
+
     @Test("特殊层级专辑保存时 cover.jpg 写入扫描出的专辑根目录")
     func stagedCoverWritesToScannedAlbumRoot() async throws {
         try await withTemporaryDirectory { root in
@@ -605,6 +687,136 @@ struct AppModelImportTests {
             await waitUntil { suggester.releaseCount() == 1 }
 
             #expect(suggester.releaseCount() == 1)
+        }
+    }
+
+    @Test("详情页手动识别允许处理已有封面的专辑")
+    func manualEnhancementHandlesCoveredAlbum() async throws {
+        try await withTemporaryDirectory { root in
+            let album = makeAlbum(
+                folderURL: root.appendingPathComponent("Artist/Covered", isDirectory: true),
+                albumName: "Covered",
+                hasCover: true
+            )
+            let appModel = await makeScannedAppModel(
+                root: root,
+                albums: [album],
+                albumNameSuggesting: StubAlbumNameSuggesting(
+                    outcome: .success(AlbumNameSuggestion(
+                        artistName: "LLM Artist",
+                        albumName: "LLM Covered"
+                    ))
+                )
+            )
+
+            appModel.requestAlbumNameEnhancement(forAlbumID: album.id)
+            await waitUntil {
+                appModel.displayAlbumName(for: album) == "LLM Covered"
+            }
+
+            #expect(appModel.displayArtistName(for: album) == "LLM Artist")
+            #expect(appModel.searchKeyword(for: album) == "LLM Artist LLM Covered")
+            #expect(appModel.hasEnhancedAlbumName(for: album))
+            #expect(appModel.albumNameEnhancementState(forAlbumID: album.id)?.isRunning == false)
+        }
+    }
+
+    @Test("手动识别会在当前 Ollama 请求后优先于剩余自动批处理执行")
+    func manualEnhancementIsInsertedAfterCurrentRunningAlbum() async throws {
+        try await withTemporaryDirectory { root in
+            let autoFirst = makeAlbum(
+                folderURL: root.appendingPathComponent("Artist/Auto First", isDirectory: true),
+                albumName: "Auto First"
+            )
+            let autoSecond = makeAlbum(
+                folderURL: root.appendingPathComponent("Artist/Auto Second", isDirectory: true),
+                albumName: "Auto Second"
+            )
+            let manualCovered = makeAlbum(
+                folderURL: root.appendingPathComponent("Artist/Manual Covered", isDirectory: true),
+                albumName: "Manual Covered",
+                hasCover: true
+            )
+            let suggester = BlockingRecordingAlbumNameSuggesting()
+            let appModel = await makeScannedAppModel(
+                root: root,
+                albums: [autoFirst, autoSecond, manualCovered],
+                albumNameSuggesting: suggester
+            )
+
+            await waitUntil { await suggester.albumNames() == ["Auto First"] }
+            appModel.requestAlbumNameEnhancement(forAlbumID: manualCovered.id)
+
+            #expect(appModel.albumNameEnhancementState(forAlbumID: manualCovered.id)?.isQueued == true)
+            await suggester.releaseNext()
+            await waitUntil {
+                await suggester.albumNames() == ["Auto First", "Manual Covered"]
+            }
+
+            #expect(await suggester.albumNames() == ["Auto First", "Manual Covered"])
+            await suggester.releaseNext()
+            await waitUntil {
+                await suggester.albumNames() == ["Auto First", "Manual Covered", "Auto Second"]
+            }
+            await suggester.releaseNext()
+        }
+    }
+
+    @Test("同一专辑重复点击手动识别只入队一次")
+    func duplicateManualEnhancementRequestIsDeduplicated() async throws {
+        try await withTemporaryDirectory { root in
+            let album = makeAlbum(
+                folderURL: root.appendingPathComponent("Artist/Covered", isDirectory: true),
+                albumName: "Covered",
+                hasCover: true
+            )
+            let suggester = BlockingRecordingAlbumNameSuggesting()
+            let appModel = await makeScannedAppModel(
+                root: root,
+                albums: [album],
+                albumNameSuggesting: suggester
+            )
+
+            appModel.requestAlbumNameEnhancement(forAlbumID: album.id)
+            appModel.requestAlbumNameEnhancement(forAlbumID: album.id)
+            await waitUntil { await suggester.albumNames() == ["Covered"] }
+            await suggester.releaseNext()
+            await waitUntil {
+                appModel.albumNameEnhancementState(forAlbumID: album.id)?.isRunning == false
+            }
+
+            #expect(await suggester.albumNames() == ["Covered"])
+        }
+    }
+
+    @Test("手动识别失败时保留原始名称并记录单专辑错误")
+    func manualEnhancementFailureKeepsOriginalNameAndReportsAlbumError() async throws {
+        try await withTemporaryDirectory { root in
+            let album = makeAlbum(
+                folderURL: root.appendingPathComponent("Artist/Covered", isDirectory: true),
+                albumName: "Covered",
+                hasCover: true
+            )
+            let appModel = await makeScannedAppModel(
+                root: root,
+                albums: [album],
+                albumNameSuggesting: StubAlbumNameSuggesting(
+                    outcome: .failure("Ollama 请求失败")
+                )
+            )
+
+            appModel.requestAlbumNameEnhancement(forAlbumID: album.id)
+            await waitUntil {
+                appModel.albumNameEnhancementState(forAlbumID: album.id)?.lastErrorMessage != nil
+            }
+
+            let state = try #require(appModel.albumNameEnhancementState(forAlbumID: album.id))
+            #expect(appModel.displayAlbumName(for: album) == "Covered")
+            #expect(appModel.hasEnhancedAlbumName(for: album) == false)
+            #expect(state.isQueued == false)
+            #expect(state.isRunning == false)
+            #expect(state.lastErrorMessage?.contains("Ollama 请求失败") == true)
+            #expect(appModel.errorMessage?.contains("本地 Ollama 专辑名称增强失败") == true)
         }
     }
 
@@ -1191,6 +1403,22 @@ private struct StubCoverImageWriter: CoverImageWriting {
     }
 }
 
+private actor CountingCoverImageWriter: CoverImageWriting {
+    private var count = 0
+
+    func writeCoverImage(
+        from sourceURL: URL,
+        toAlbumFolder albumFolderURL: URL
+    ) async throws -> URL {
+        count += 1
+        return albumFolderURL.appendingPathComponent("cover.jpg")
+    }
+
+    func writeCount() -> Int {
+        count
+    }
+}
+
 private actor DelayedCountingCoverImageWriter: CoverImageWriting {
     private let delayNanoseconds: UInt64
     private var count = 0
@@ -1288,6 +1516,42 @@ private struct RecordingAlbumNameSuggesting: AlbumNameSuggesting {
             artistName: input.originalArtistName,
             albumName: input.originalAlbumName
         )
+    }
+}
+
+private final class BlockingRecordingAlbumNameSuggesting: AlbumNameSuggesting, @unchecked Sendable {
+    private let lock = NSLock()
+    private var processedAlbumNames: [String] = []
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+
+    func suggestAlbumName(for input: AlbumNameEnhancementInput) async throws -> AlbumNameSuggestion {
+        let originalArtistName = input.originalArtistName
+        let originalAlbumName = input.originalAlbumName
+        lock.withLock {
+            processedAlbumNames.append(originalAlbumName)
+        }
+        await withCheckedContinuation { continuation in
+            lock.withLock {
+                continuations.append(continuation)
+            }
+        }
+        return AlbumNameSuggestion(
+            artistName: originalArtistName,
+            albumName: "\(originalAlbumName) Enhanced"
+        )
+    }
+
+    func albumNames() -> [String] {
+        lock.withLock {
+            processedAlbumNames
+        }
+    }
+
+    func releaseNext() {
+        let continuation = lock.withLock {
+            continuations.isEmpty ? nil : continuations.removeFirst()
+        }
+        continuation?.resume()
     }
 }
 

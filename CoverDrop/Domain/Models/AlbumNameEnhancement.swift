@@ -72,3 +72,19 @@ struct AlbumNameEnhancementStatus: Equatable, Sendable {
         self.lastErrorMessage = lastErrorMessage
     }
 }
+
+struct AlbumNameEnhancementAlbumState: Equatable, Sendable {
+    let isQueued: Bool
+    let isRunning: Bool
+    let lastErrorMessage: String?
+
+    nonisolated init(
+        isQueued: Bool,
+        isRunning: Bool,
+        lastErrorMessage: String?
+    ) {
+        self.isQueued = isQueued
+        self.isRunning = isRunning
+        self.lastErrorMessage = lastErrorMessage
+    }
+}

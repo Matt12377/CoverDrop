@@ -71,8 +71,9 @@ struct LibraryScanSummaryView: View {
                 return
             }
             appModel.reportSelectedAlbumDisappeared(albumID: selectedAlbumID)
-            isShowingAlbumDetail = false
-            clearSelectedAlbumDetail()
+            if !isShowingAlbumDetail {
+                clearSelectedAlbumDetail()
+            }
         }
     }
 
@@ -449,6 +450,7 @@ private struct AlbumDetailSheet: View {
     @State private var isDropTargeted = false
     @State private var isShowingCoverSearch = false
     @State private var selectedSearchSourceID = ""
+    @State private var isAlbumRemoved = false
 
     private var album: AlbumScanRecord? {
         appModel.albumInSelectedLibrary(id: albumID)
@@ -460,19 +462,10 @@ private struct AlbumDetailSheet: View {
 
     var body: some View {
         Group {
-            if let album {
+            if isAlbumRemoved || album == nil {
+                removedAlbumState
+            } else if let album {
                 albumDetail(album)
-            } else {
-                ContentUnavailableView {
-                    Label("找不到这张专辑", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text("当前扫描结果中已没有这张专辑。")
-                } actions: {
-                    Button("取消") {
-                        onClose()
-                    }
-                }
-                .frame(width: 760, height: 560)
             }
         }
         .frame(width: 680, height: 520)
@@ -493,7 +486,7 @@ private struct AlbumDetailSheet: View {
                 .allowsHitTesting(false)
         }
         .sheet(isPresented: $isShowingCoverSearch) {
-            if let album {
+            if !isAlbumRemoved, let album {
                 CoverSearchSheet(
                     album: album,
                     appModel: appModel,
@@ -507,17 +500,58 @@ private struct AlbumDetailSheet: View {
                 if selectedSearchSourceID.isEmpty {
                     selectedSearchSourceID = coverSearchConfiguration.defaultSource.id
                 }
+                checkAlbumRemoval()
+            }
+        }
+        .task(id: albumID) {
+            while !Task.isCancelled && !isAlbumRemoved {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard !Task.isCancelled else { return }
+                checkAlbumRemoval()
+            }
+        }
+        .onChange(of: album == nil) { _, isMissing in
+            if isMissing {
+                isAlbumRemoved = true
+                isShowingCoverSearch = false
             }
         }
         .onDrop(
             of: CoverDropReceiver.typeIdentifiers,
             isTargeted: $isDropTargeted
         ) { providers in
-            CoverDropReceiver.receive(
+            guard !isAlbumRemoved else { return false }
+            return CoverDropReceiver.receive(
                 providers,
                 albumID: albumID,
                 appModel: appModel
             )
+        }
+    }
+
+    private var removedAlbumState: some View {
+        ZStack {
+            Text("该专辑已移除")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(LibraryHomeDesignToken.textPrimary)
+
+            VStack {
+                Spacer()
+
+                HStack {
+                    Spacer()
+
+                    Button {
+                        onClose()
+                    } label: {
+                        Label("返回封面墙", systemImage: "arrow.left")
+                    }
+                    .buttonStyle(.coverDropSecondary(height: 34))
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 16)
+                .background(LibraryHomeDesignToken.bgSecondary)
+            }
         }
     }
 
@@ -595,6 +629,8 @@ private struct AlbumDetailSheet: View {
                                     title: "搜索词",
                                     value: appModel.searchKeyword(for: album),
                                     monospaced: false,
+                                    ollamaAction: { requestAlbumNameEnhancement(for: album) },
+                                    ollamaState: appModel.albumNameEnhancementState(forAlbumID: album.id),
                                     copyAction: { copySearchKeyword(for: album) }
                                 )
                                 infoField(title: "原始名", value: "\(album.artistName) / \(album.albumName)")
@@ -764,10 +800,20 @@ private struct AlbumDetailSheet: View {
         }
     }
 
+    private func checkAlbumRemoval() {
+        guard !isAlbumRemoved else { return }
+        if appModel.removeAlbumIfFolderMissing(albumID: albumID) || album == nil {
+            isAlbumRemoved = true
+            isShowingCoverSearch = false
+        }
+    }
+
     private func infoField(
         title: String,
         value: String,
         monospaced: Bool = false,
+        ollamaAction: (() -> Void)? = nil,
+        ollamaState: AlbumNameEnhancementAlbumState? = nil,
         copyAction: (() -> Void)? = nil
     ) -> some View {
         HStack(alignment: .center, spacing: 8) {
@@ -785,6 +831,18 @@ private struct AlbumDetailSheet: View {
                 .help(value)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
+            if let ollamaAction {
+                Button(action: ollamaAction) {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 26, height: 26)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(ollamaState?.isRunning == true ? LibraryHomeDesignToken.accent : LibraryHomeDesignToken.textTertiary)
+                .disabled(ollamaState?.isQueued == true || ollamaState?.isRunning == true)
+                .help(ollamaHelpText(for: ollamaState))
+            }
+
             if let copyAction {
                 Button(action: copyAction) {
                     Image(systemName: "doc.on.doc")
@@ -796,6 +854,23 @@ private struct AlbumDetailSheet: View {
                 .help("复制搜索词")
             }
         }
+    }
+
+    private func requestAlbumNameEnhancement(for album: AlbumScanRecord) {
+        appModel.requestAlbumNameEnhancement(forAlbumID: album.id)
+    }
+
+    private func ollamaHelpText(for state: AlbumNameEnhancementAlbumState?) -> String {
+        if state?.isRunning == true {
+            return "Ollama 正在识别这张专辑"
+        }
+        if state?.isQueued == true {
+            return "已加入 Ollama 识别队列"
+        }
+        if let message = state?.lastErrorMessage {
+            return "上次识别失败：\(message)。点击重试"
+        }
+        return "用 Ollama 识别专辑名"
     }
 
     private func searchKeyword(for album: AlbumScanRecord) -> String {
