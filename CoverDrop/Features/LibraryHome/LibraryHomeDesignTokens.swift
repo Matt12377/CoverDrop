@@ -1,10 +1,10 @@
 import SwiftUI
 
 enum LibraryHomeDesignToken {
-    static let bgPrimary = Color(red: 30 / 255, green: 30 / 255, blue: 30 / 255)
-    static let bgSecondary = Color(red: 37 / 255, green: 37 / 255, blue: 37 / 255)
-    static let bgTertiary = Color(red: 45 / 255, green: 45 / 255, blue: 45 / 255)
-    static let bgElevated = Color(red: 58 / 255, green: 58 / 255, blue: 58 / 255)
+    static let bgPrimary = Color(red: 34 / 255, green: 34 / 255, blue: 34 / 255)
+    static let bgSecondary = Color(red: 41 / 255, green: 41 / 255, blue: 41 / 255)
+    static let bgTertiary = Color(red: 50 / 255, green: 50 / 255, blue: 50 / 255)
+    static let bgElevated = Color(red: 64 / 255, green: 64 / 255, blue: 64 / 255)
 
     static let textPrimary = Color.white
     static let textSecondary = Color(red: 160 / 255, green: 160 / 255, blue: 160 / 255)

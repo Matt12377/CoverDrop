@@ -40,6 +40,12 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private struct LoadedScanSnapshot: Sendable {
+        let result: LibraryScanResult
+        let albumNameSuggestions: [AlbumScanRecord.ID: AlbumNameSuggestion]
+        let albumNameEnhancementStatus: AlbumNameEnhancementStatus?
+    }
+
     let environment: AppEnvironment
     @Published private(set) var route: Route = .libraries
     @Published private(set) var libraries: [LibraryRecord] = []
@@ -102,6 +108,11 @@ final class AppModel: ObservableObject {
 
     var isSelectedLibraryScanning: Bool {
         scanningLibraryID == selectedLibraryID
+    }
+
+    var isSelectedLibraryLoadingScanSnapshot: Bool {
+        guard let selectedLibraryID else { return false }
+        return loadingScanSnapshotLibraryIDs.contains(selectedLibraryID)
     }
 
     var shouldShowCoverWallForSelectedLibrary: Bool {
@@ -339,16 +350,26 @@ final class AppModel: ObservableObject {
                 return
             }
 
-            let snapshot = try await environment.scanSnapshotStore.loadSnapshot(
-                at: summary.fileURL,
-                expectedLibrary: library
-            )
-            let result = try snapshot.scanResult.makeLibraryScanResult()
+            let snapshotStore = environment.scanSnapshotStore
+            let loadedSnapshot = try await Task.detached(priority: .userInitiated) {
+                let snapshot = try await snapshotStore.loadSnapshot(
+                    at: summary.fileURL,
+                    expectedLibrary: library
+                )
+                let result = try snapshot.scanResult.makeLibraryScanResult()
+                let suggestions = snapshot.albumNameEnhancement?.makeSuggestionsByAlbumID() ?? [:]
+                let status = snapshot.albumNameEnhancement?.status?.makeAlbumNameEnhancementStatusForLoadedSnapshot()
+                return LoadedScanSnapshot(
+                    result: result,
+                    albumNameSuggestions: suggestions,
+                    albumNameEnhancementStatus: status
+                )
+            }.value
             cancelAlbumNameEnhancement(for: library.id)
-            scanResultsByLibraryID[library.id] = result
-            albumNameSuggestionsByLibraryID[library.id] = snapshot.albumNameEnhancement?.makeSuggestionsByAlbumID() ?? [:]
-            if let status = snapshot.albumNameEnhancement?.status {
-                albumNameEnhancementStatusByLibraryID[library.id] = status.makeAlbumNameEnhancementStatusForLoadedSnapshot()
+            scanResultsByLibraryID[library.id] = loadedSnapshot.result
+            albumNameSuggestionsByLibraryID[library.id] = loadedSnapshot.albumNameSuggestions
+            if let status = loadedSnapshot.albumNameEnhancementStatus {
+                albumNameEnhancementStatusByLibraryID[library.id] = status
             }
             activeScanSnapshotsByLibraryID[library.id] = summary
             scanSnapshotMessagesByLibraryID[library.id] = "已加载快照结果：\(summary.fileURL.lastPathComponent)"
@@ -1432,12 +1453,20 @@ final class AppModel: ObservableObject {
 
     private func saveNewScanSnapshot(for library: LibraryRecord, result: LibraryScanResult) async {
         do {
-            let snapshot = makeScanSnapshot(
-                for: library,
-                result: result,
-                createdAt: .now
-            )
-            let summary = try await environment.scanSnapshotStore.saveNewSnapshot(snapshot)
+            let createdAt = Date.now
+            let suggestions = albumNameSuggestionsByLibraryID[library.id] ?? [:]
+            let status = albumNameEnhancementStatusByLibraryID[library.id]
+            let snapshotStore = environment.scanSnapshotStore
+            let summary = try await Task.detached(priority: .utility) {
+                let snapshot = Self.makeScanSnapshot(
+                    for: library,
+                    result: result,
+                    createdAt: createdAt,
+                    albumNameSuggestions: suggestions,
+                    albumNameEnhancementStatus: status
+                )
+                return try await snapshotStore.saveNewSnapshot(snapshot)
+            }.value
             latestScanSnapshotsByLibraryID[library.id] = summary
             activeScanSnapshotsByLibraryID[library.id] = summary
             scanSnapshotMessagesByLibraryID[library.id] = "已保存扫描快照：\(summary.fileURL.lastPathComponent)"

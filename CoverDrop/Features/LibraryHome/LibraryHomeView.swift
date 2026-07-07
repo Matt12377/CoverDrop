@@ -206,6 +206,8 @@ struct LibraryHomeView: View {
         if let library = appModel.selectedLibrary {
             if appModel.isSelectedLibraryScanning {
                 scanProgressPage(library: library)
+            } else if appModel.isSelectedLibraryLoadingScanSnapshot {
+                scanSnapshotLoadingPage(library: library)
             } else if appModel.shouldShowCoverWallForSelectedLibrary,
                let result = appModel.scanResultForSelectedLibrary {
                 coverWallPage(library: library, result: result)
@@ -227,6 +229,30 @@ struct LibraryHomeView: View {
                 .frame(width: 260, height: 6)
 
             Text(appModel.scanProgress?.completedDescription ?? "正在建立专辑清单…")
+                .font(.caption)
+                .foregroundStyle(LibraryHomeDesignToken.textTertiary)
+                .lineLimit(1)
+
+            Text(library.displayName)
+                .font(.caption2)
+                .foregroundStyle(LibraryHomeDesignToken.textTertiary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(LibraryHomeDesignToken.bgSecondary.ignoresSafeArea())
+    }
+
+    private func scanSnapshotLoadingPage(library: LibraryRecord) -> some View {
+        VStack(spacing: 12) {
+            Text("正在加载上次扫描结果")
+                .font(.callout.weight(.medium))
+                .foregroundStyle(LibraryHomeDesignToken.textSecondary)
+
+            ScanProgressBar(fraction: nil)
+                .frame(width: 260, height: 6)
+
+            Text(appModel.scanSnapshotMessage(for: library.id) ?? "正在读取历史快照…")
                 .font(.caption)
                 .foregroundStyle(LibraryHomeDesignToken.textTertiary)
                 .lineLimit(1)
@@ -553,10 +579,13 @@ private struct LibraryListItem: View {
             }
             .foregroundStyle(isSelected ? LibraryHomeDesignToken.accent : LibraryHomeDesignToken.textSecondary)
             .padding(.horizontal, 8)
-            .frame(height: 36)
+            .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusSm))
             .background(rowBackground, in: RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusSm))
+            .shadow(color: rowShadowColor, radius: rowShadowRadius, x: 0, y: rowShadowYOffset)
         }
         .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .onHover { isHovered = $0 }
         .help(library.rootPath)
     }
@@ -569,6 +598,24 @@ private struct LibraryListItem: View {
         } else {
             .clear
         }
+    }
+
+    private var rowShadowColor: Color {
+        if isSelected {
+            return LibraryHomeDesignToken.shadowElevated.opacity(0.5)
+        }
+        if isHovered {
+            return LibraryHomeDesignToken.shadowCard.opacity(0.5)
+        }
+        return .clear
+    }
+
+    private var rowShadowRadius: CGFloat {
+        isSelected ? 9 : (isHovered ? 6 : 0)
+    }
+
+    private var rowShadowYOffset: CGFloat {
+        isSelected ? 4 : (isHovered ? 2 : 0)
     }
 }
 

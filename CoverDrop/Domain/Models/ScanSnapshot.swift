@@ -48,7 +48,7 @@ extension ScanSnapshot {
             looseAudioPaths = result.looseAudioPaths
         }
 
-        func makeLibraryScanResult() throws -> LibraryScanResult {
+        nonisolated func makeLibraryScanResult() throws -> LibraryScanResult {
             LibraryScanResult(
                 albums: try albums.map { try $0.makeAlbumScanRecord() },
                 looseAudioPaths: looseAudioPaths
@@ -73,7 +73,7 @@ extension ScanSnapshot {
             issues = album.issues.map(Issue.init(issue:))
         }
 
-        func makeAlbumScanRecord() throws -> AlbumScanRecord {
+        nonisolated func makeAlbumScanRecord() throws -> AlbumScanRecord {
             AlbumScanRecord(
                 folderURL: URL(fileURLWithPath: folderPath, isDirectory: true),
                 artistName: artistName,
@@ -100,7 +100,7 @@ extension ScanSnapshot {
             readError = audioFile.readError
         }
 
-        func makeAudioFileRecord() throws -> AudioFileRecord {
+        nonisolated func makeAudioFileRecord() throws -> AudioFileRecord {
             AudioFileRecord(
                 url: URL(fileURLWithPath: path),
                 relativePath: relativePath,
@@ -132,7 +132,7 @@ extension ScanSnapshot {
             embeddedArtworkPath = metadata.embeddedArtworkURL?.standardizedFileURL.path
         }
 
-        func makeAudioMetadata() -> AudioMetadata {
+        nonisolated func makeAudioMetadata() -> AudioMetadata {
             AudioMetadata(
                 title: title,
                 artist: artist,
@@ -163,7 +163,7 @@ extension ScanSnapshot {
             source = Source(coverSource: cover.source)
         }
 
-        func makeCoverCandidate() -> CoverCandidate {
+        nonisolated func makeCoverCandidate() -> CoverCandidate {
             CoverCandidate(
                 url: URL(fileURLWithPath: path),
                 previewURL: previewPath.map(URL.init(fileURLWithPath:)),
@@ -188,7 +188,7 @@ extension ScanSnapshot {
             }
         }
 
-        func makeCoverSource() -> CoverSource {
+        nonisolated func makeCoverSource() -> CoverSource {
             switch self {
             case .file:
                 .file
@@ -242,7 +242,7 @@ extension ScanSnapshot {
             }
         }
 
-        func makeAlbumScanIssue() throws -> AlbumScanIssue {
+        nonisolated func makeAlbumScanIssue() throws -> AlbumScanIssue {
             switch kind {
             case .singleFileNeedsConfirmation:
                 guard let hasCue else { throw ScanSnapshotError.missingIssuePayload(kind.rawValue) }
@@ -272,7 +272,7 @@ extension ScanSnapshot {
             self.status = status.map(Status.init(status:))
         }
 
-        func makeSuggestionsByAlbumID() -> [AlbumScanRecord.ID: AlbumNameSuggestion] {
+        nonisolated func makeSuggestionsByAlbumID() -> [AlbumScanRecord.ID: AlbumNameSuggestion] {
             suggestionsByAlbumPath.mapValues { $0.makeAlbumNameSuggestion() }
         }
     }
@@ -286,7 +286,7 @@ extension ScanSnapshot {
             albumName = suggestion.albumName
         }
 
-        func makeAlbumNameSuggestion() -> AlbumNameSuggestion {
+        nonisolated func makeAlbumNameSuggestion() -> AlbumNameSuggestion {
             AlbumNameSuggestion(artistName: artistName, albumName: albumName)
         }
     }
@@ -300,7 +300,7 @@ extension ScanSnapshot {
             lastErrorMessage = status.lastErrorMessage
         }
 
-        func makeAlbumNameEnhancementStatusForLoadedSnapshot() -> AlbumNameEnhancementStatus {
+        nonisolated func makeAlbumNameEnhancementStatusForLoadedSnapshot() -> AlbumNameEnhancementStatus {
             AlbumNameEnhancementStatus(
                 isRunning: false,
                 lastErrorMessage: lastErrorMessage
