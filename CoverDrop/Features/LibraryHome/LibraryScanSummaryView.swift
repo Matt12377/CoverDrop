@@ -643,11 +643,20 @@ private struct AlbumDetailSheet: View {
                 }
                 .buttonStyle(.coverDropSecondary(height: 34))
 
-                Button("保存封面") {
+                Button {
                     savePendingCover()
+                } label: {
+                    if appModel.isSavingCoverImage(for: album.id) {
+                        Label("保存中...", systemImage: "hourglass")
+                    } else {
+                        Text("保存封面")
+                    }
                 }
                 .buttonStyle(.coverDropPrimary(height: 34))
-                .disabled(appModel.pendingCoverURL(for: album.id) == nil)
+                .disabled(
+                    appModel.pendingCoverURL(for: album.id) == nil
+                    || appModel.isSavingCoverImage(for: album.id)
+                )
                 .keyboardShortcut(.defaultAction)
             }
             .padding(.horizontal, 24)
@@ -745,6 +754,7 @@ private struct AlbumDetailSheet: View {
     }
 
     private func savePendingCover() {
+        guard !appModel.isSavingCoverImage(for: albumID) else { return }
         CoverDropDebugLog.write("保存封面：用户点击保存按钮，albumID=\(albumID)")
         Task {
             let didSave = await appModel.savePendingCoverImage(forAlbumID: albumID)
@@ -1449,8 +1459,8 @@ private enum CoverDropReceiver {
             }
 
             CoverDropDebugLog.write("封面拖拽：图片数据 representation 读取成功，type=\(typeIdentifier)，大小=\(data.count) bytes")
-            Task { @MainActor in
-                appModel.stageCoverImageData(
+            Task {
+                await appModel.stageCoverImageData(
                     data,
                     suggestedExtension: suggestedExtension(for: typeIdentifier),
                     forAlbumID: albumID

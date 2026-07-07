@@ -46,6 +46,27 @@ final class AppModel: ObservableObject {
         let albumNameEnhancementStatus: AlbumNameEnhancementStatus?
     }
 
+    private final class ScanSnapshotLoadProgressReporter: @unchecked Sendable {
+        weak var appModel: AppModel?
+        let libraryID: LibraryRecord.ID
+
+        init(appModel: AppModel, libraryID: LibraryRecord.ID) {
+            self.appModel = appModel
+            self.libraryID = libraryID
+        }
+
+        func report(_ progress: ScanSnapshotLoadProgress) async {
+            await MainActor.run { [weak appModel, libraryID] in
+                guard let appModel,
+                      appModel.loadingScanSnapshotLibraryIDs.contains(libraryID) else {
+                    return
+                }
+                appModel.scanSnapshotLoadProgressByLibraryID[libraryID] = progress
+                appModel.scanSnapshotMessagesByLibraryID[libraryID] = progress.completedDescription
+            }
+        }
+    }
+
     let environment: AppEnvironment
     @Published private(set) var route: Route = .libraries
     @Published private(set) var libraries: [LibraryRecord] = []
@@ -62,10 +83,12 @@ final class AppModel: ObservableObject {
     private var albumNameEnhancementRequestIDsByLibraryID: [LibraryRecord.ID: UUID] = [:]
     @Published private(set) var pendingCoverURLsByAlbumID: [AlbumScanRecord.ID: URL] = [:]
     @Published private(set) var coverWriteMessagesByAlbumID: [AlbumScanRecord.ID: String] = [:]
+    @Published private(set) var savingCoverAlbumIDs: Set<AlbumScanRecord.ID> = []
     @Published private(set) var latestScanSnapshotsByLibraryID: [LibraryRecord.ID: ScanSnapshotSummary] = [:]
     @Published private(set) var activeScanSnapshotsByLibraryID: [LibraryRecord.ID: ScanSnapshotSummary] = [:]
     @Published private(set) var scanSnapshotMessagesByLibraryID: [LibraryRecord.ID: String] = [:]
     @Published private(set) var loadingScanSnapshotLibraryIDs: Set<LibraryRecord.ID> = []
+    @Published private(set) var scanSnapshotLoadProgressByLibraryID: [LibraryRecord.ID: ScanSnapshotLoadProgress] = [:]
     @Published private(set) var realtimeRefreshMessagesByLibraryID: [LibraryRecord.ID: String] = [:]
     nonisolated(unsafe) private var libraryChangeMonitorTasksByLibraryID: [LibraryRecord.ID: Task<Void, Never>] = [:]
     nonisolated(unsafe) private var realtimeRefreshDebounceTasksByLibraryID: [LibraryRecord.ID: Task<Void, Never>] = [:]
@@ -112,7 +135,7 @@ final class AppModel: ObservableObject {
 
     var isSelectedLibraryLoadingScanSnapshot: Bool {
         guard let selectedLibraryID else { return false }
-        return loadingScanSnapshotLibraryIDs.contains(selectedLibraryID)
+        return scanSnapshotLoadProgressByLibraryID[selectedLibraryID] != nil
     }
 
     var shouldShowCoverWallForSelectedLibrary: Bool {
@@ -300,6 +323,10 @@ final class AppModel: ObservableObject {
         coverWriteMessagesByAlbumID[albumID]
     }
 
+    func isSavingCoverImage(for albumID: AlbumScanRecord.ID) -> Bool {
+        savingCoverAlbumIDs.contains(albumID)
+    }
+
     func albumNameEnhancementStatus(for libraryID: LibraryRecord.ID) -> AlbumNameEnhancementStatus? {
         albumNameEnhancementStatusByLibraryID[libraryID]
     }
@@ -314,6 +341,10 @@ final class AppModel: ObservableObject {
 
     func scanSnapshotMessage(for libraryID: LibraryRecord.ID) -> String? {
         scanSnapshotMessagesByLibraryID[libraryID]
+    }
+
+    func scanSnapshotLoadProgress(for libraryID: LibraryRecord.ID) -> ScanSnapshotLoadProgress? {
+        scanSnapshotLoadProgressByLibraryID[libraryID]
     }
 
     func isLoadingScanSnapshot(for libraryID: LibraryRecord.ID) -> Bool {
@@ -335,8 +366,14 @@ final class AppModel: ObservableObject {
         guard !loadingScanSnapshotLibraryIDs.contains(library.id) else { return }
         loadingScanSnapshotLibraryIDs.insert(library.id)
         scanSnapshotMessagesByLibraryID[library.id] = "正在加载最近扫描结果..."
+        scanSnapshotLoadProgressByLibraryID[library.id] = ScanSnapshotLoadProgress(
+            phase: .locating,
+            completedAlbums: 0,
+            totalAlbums: nil
+        )
         defer {
             loadingScanSnapshotLibraryIDs.remove(library.id)
+            scanSnapshotLoadProgressByLibraryID[library.id] = nil
         }
 
         do {
@@ -351,19 +388,22 @@ final class AppModel: ObservableObject {
             }
 
             let snapshotStore = environment.scanSnapshotStore
-            let loadedSnapshot = try await Task.detached(priority: .userInitiated) {
-                let snapshot = try await snapshotStore.loadSnapshot(
+            let libraryID = library.id
+            scanSnapshotLoadProgressByLibraryID[libraryID] = ScanSnapshotLoadProgress(
+                phase: .reading,
+                completedAlbums: 0,
+                totalAlbums: summary.albumCount
+            )
+            let progressReporter = ScanSnapshotLoadProgressReporter(appModel: self, libraryID: libraryID)
+            let loadedSnapshot = try await Task.detached(priority: .userInitiated) { [snapshotStore, progressReporter] in
+                try await Self.loadScanSnapshot(
                     at: summary.fileURL,
-                    expectedLibrary: library
-                )
-                let result = try snapshot.scanResult.makeLibraryScanResult()
-                let suggestions = snapshot.albumNameEnhancement?.makeSuggestionsByAlbumID() ?? [:]
-                let status = snapshot.albumNameEnhancement?.status?.makeAlbumNameEnhancementStatusForLoadedSnapshot()
-                return LoadedScanSnapshot(
-                    result: result,
-                    albumNameSuggestions: suggestions,
-                    albumNameEnhancementStatus: status
-                )
+                    expectedLibrary: library,
+                    expectedAlbumCount: summary.albumCount,
+                    snapshotStore: snapshotStore
+                ) { progress in
+                    await progressReporter.report(progress)
+                }
             }.value
             cancelAlbumNameEnhancement(for: library.id)
             scanResultsByLibraryID[library.id] = loadedSnapshot.result
@@ -381,6 +421,82 @@ final class AppModel: ObservableObject {
             )
             errorMessage = "加载扫描快照失败：\(error.localizedDescription)"
         }
+    }
+
+    private nonisolated static func loadScanSnapshot(
+        at fileURL: URL,
+        expectedLibrary: LibraryRecord,
+        expectedAlbumCount: Int,
+        snapshotStore: any ScanSnapshotStoring,
+        progress: @escaping @Sendable (ScanSnapshotLoadProgress) async -> Void
+    ) async throws -> LoadedScanSnapshot {
+        await progress(
+            ScanSnapshotLoadProgress(
+                phase: .reading,
+                completedAlbums: 0,
+                totalAlbums: expectedAlbumCount
+            )
+        )
+        let snapshot: ScanSnapshot
+        if let streamingStore = snapshotStore as? any StreamingScanSnapshotStoring {
+            snapshot = try await streamingStore.loadSnapshot(
+                at: fileURL,
+                expectedLibrary: expectedLibrary,
+                progress: progress
+            )
+        } else {
+            snapshot = try await snapshotStore.loadSnapshot(
+                at: fileURL,
+                expectedLibrary: expectedLibrary
+            )
+        }
+
+        let totalAlbums = snapshot.scanResult.albums.count
+        await progress(
+            ScanSnapshotLoadProgress(
+                phase: .converting,
+                completedAlbums: 0,
+                totalAlbums: totalAlbums
+            )
+        )
+
+        var albums: [AlbumScanRecord] = []
+        albums.reserveCapacity(totalAlbums)
+        for (index, album) in snapshot.scanResult.albums.enumerated() {
+            albums.append(try album.makeAlbumScanRecord())
+            let completedAlbums = index + 1
+            if completedAlbums == totalAlbums || completedAlbums % 25 == 0 {
+                await progress(
+                    ScanSnapshotLoadProgress(
+                        phase: .converting,
+                        completedAlbums: completedAlbums,
+                        totalAlbums: totalAlbums
+                    )
+                )
+            }
+        }
+
+        if totalAlbums == 0 {
+            await progress(
+                ScanSnapshotLoadProgress(
+                    phase: .converting,
+                    completedAlbums: 0,
+                    totalAlbums: 0
+                )
+            )
+        }
+
+        let result = LibraryScanResult(
+            albums: albums,
+            looseAudioPaths: snapshot.scanResult.looseAudioPaths
+        )
+        let suggestions = snapshot.albumNameEnhancement?.makeSuggestionsByAlbumID() ?? [:]
+        let status = snapshot.albumNameEnhancement?.status?.makeAlbumNameEnhancementStatusForLoadedSnapshot()
+        return LoadedScanSnapshot(
+            result: result,
+            albumNameSuggestions: suggestions,
+            albumNameEnhancementStatus: status
+        )
     }
 
     func displayArtistName(for album: AlbumScanRecord, in libraryID: LibraryRecord.ID? = nil) -> String {
@@ -431,9 +547,9 @@ final class AppModel: ObservableObject {
         _ data: Data,
         suggestedExtension: String?,
         forAlbumID albumID: AlbumScanRecord.ID
-    ) -> Bool {
+    ) async -> Bool {
         do {
-            let stagedURL = try CoverImageStagingCache.stageImageData(
+            let stagedURL = try await Self.stageCoverImageDataOffMainActor(
                 data,
                 suggestedExtension: suggestedExtension
             )
@@ -476,9 +592,18 @@ final class AppModel: ObservableObject {
     }
 
     func savePendingCoverImage(forAlbumID albumID: AlbumScanRecord.ID) async -> Bool {
+        guard !savingCoverAlbumIDs.contains(albumID) else {
+            CoverDropDebugLog.write("保存封面：忽略重复保存请求，albumID=\(albumID)")
+            return false
+        }
         guard let sourceURL = pendingCoverURLsByAlbumID[albumID] else {
             return false
         }
+        savingCoverAlbumIDs.insert(albumID)
+        defer {
+            savingCoverAlbumIDs.remove(albumID)
+        }
+
         let didWrite = await writeCoverImage(from: sourceURL, forAlbumID: albumID)
         if didWrite {
             pendingCoverURLsByAlbumID[albumID] = nil
@@ -545,6 +670,18 @@ final class AppModel: ObservableObject {
         await writeCoverImage(from: sourceURL, forAlbumID: album.id)
     }
 
+    nonisolated private static func stageCoverImageDataOffMainActor(
+        _ data: Data,
+        suggestedExtension: String?
+    ) async throws -> URL {
+        try await Task.detached(priority: .userInitiated) {
+            try CoverImageStagingCache.stageImageData(
+                data,
+                suggestedExtension: suggestedExtension
+            )
+        }.value
+    }
+
     private func replaceAlbumCover(
         albumID: AlbumScanRecord.ID,
         inLibraryID libraryID: LibraryRecord.ID,
@@ -586,8 +723,7 @@ final class AppModel: ObservableObject {
         libraryID: LibraryRecord.ID
     ) {
         Task.detached { [weak self] in
-            let previewURL = CoverPreviewCache.refreshedPreviewURL(for: coverURL)
-            CoverPreviewCache.invalidateImageCache(for: coverURL)
+            let previewURL = CoverPreviewCache.refreshedPreviewURLForUpdatedCover(coverURL)
             guard let previewURL else { return }
 
             await MainActor.run { [weak self] in
@@ -845,6 +981,7 @@ final class AppModel: ObservableObject {
         activeScanSnapshotsByLibraryID[libraryID] = nil
         scanSnapshotMessagesByLibraryID[libraryID] = nil
         loadingScanSnapshotLibraryIDs.remove(libraryID)
+        scanSnapshotLoadProgressByLibraryID[libraryID] = nil
         realtimeRefreshMessagesByLibraryID[libraryID] = nil
         refreshingLibraryIDs.remove(libraryID)
         pendingRefreshLibraryIDs.remove(libraryID)

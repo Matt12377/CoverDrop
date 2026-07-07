@@ -181,7 +181,7 @@ final class FileScanSnapshotStore: ScanSnapshotStoring, @unchecked Sendable {
         return String(format: "%016llx", hash)
     }
 
-    nonisolated private static func normalizedPath(_ path: String) -> String {
+    nonisolated static func normalizedPath(_ path: String) -> String {
         URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
     }
 }

@@ -61,7 +61,7 @@ struct AppEnvironment: Sendable {
                 requestTimeoutSeconds: configuration.localLLM.requestTimeoutSeconds,
                 keepAlive: configuration.localLLM.batchKeepAlive
             ),
-            scanSnapshotStore: FileScanSnapshotStore(
+            scanSnapshotStore: SQLiteScanSnapshotStore(
                 directoryURL: configuration.scanDatabases.directoryURL
             )
         )

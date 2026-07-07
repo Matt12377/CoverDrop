@@ -45,6 +45,15 @@ enum CoverPreviewCache {
         }
     }
 
+    nonisolated static func refreshedPreviewURLForUpdatedCover(_ sourceURL: URL) -> URL? {
+        invalidateImageCache(for: sourceURL)
+        let previewURL = refreshedPreviewURL(for: sourceURL)
+        if let previewURL {
+            invalidateImageCache(for: previewURL)
+        }
+        return previewURL
+    }
+
     nonisolated static func clearMemoryCache() {
         memoryCache.removeAllObjects()
         imageCache.removeAllObjects()

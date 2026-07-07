@@ -63,6 +63,35 @@ struct CoverPreviewCacheTests {
         }
     }
 
+    @Test("内部保存封面后会刷新预览并失效旧缩略图")
+    func refreshedPreviewURLForUpdatedCoverInvalidatesSourceAndPreviewImages() async throws {
+        try await withTemporaryDirectory { root in
+            let imageURL = root.appendingPathComponent("cover.png")
+            let redData = try pngData(width: 3, height: 3, color: .red)
+            let blueData = try pngData(width: 3, height: 3, color: .blue)
+            try redData.write(to: imageURL)
+            try setModificationDate(Date(timeIntervalSince1970: 6_000), for: imageURL)
+            CoverPreviewCache.clearMemoryCache()
+
+            let firstPreviewURL = try #require(CoverPreviewCache.refreshedPreviewURLForUpdatedCover(imageURL))
+            let firstSourceImage = try #require(CoverPreviewCache.cachedImage(for: imageURL, maxPixelSize: 336))
+            let firstPreviewImage = try #require(CoverPreviewCache.cachedImage(for: firstPreviewURL, maxPixelSize: 336))
+            let firstPreviewData = try Data(contentsOf: firstPreviewURL)
+
+            try blueData.write(to: imageURL)
+            try setModificationDate(Date(timeIntervalSince1970: 6_000), for: imageURL)
+
+            let secondPreviewURL = try #require(CoverPreviewCache.refreshedPreviewURLForUpdatedCover(imageURL))
+            let secondSourceImage = try #require(CoverPreviewCache.cachedImage(for: imageURL, maxPixelSize: 336))
+            let secondPreviewImage = try #require(CoverPreviewCache.cachedImage(for: secondPreviewURL, maxPixelSize: 336))
+            let secondPreviewData = try Data(contentsOf: secondPreviewURL)
+
+            #expect(firstSourceImage !== secondSourceImage)
+            #expect(firstPreviewImage !== secondPreviewImage)
+            #expect(firstPreviewData != secondPreviewData)
+        }
+    }
+
     private func pngData(width: Int, height: Int, color: NSColor) throws -> Data {
         let rgbColor = try #require(color.usingColorSpace(.deviceRGB))
         let red = UInt8((rgbColor.redComponent * 255).rounded())

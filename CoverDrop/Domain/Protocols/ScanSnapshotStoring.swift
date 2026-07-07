@@ -1,5 +1,40 @@
 import Foundation
 
+struct ScanSnapshotLoadProgress: Equatable, Sendable {
+    enum Phase: Equatable, Sendable {
+        case locating
+        case reading
+        case converting
+
+        var displayName: String {
+            switch self {
+            case .locating:
+                "正在查找历史快照"
+            case .reading:
+                "正在读取历史快照"
+            case .converting:
+                "正在加载专辑"
+            }
+        }
+    }
+
+    let phase: Phase
+    let completedAlbums: Int
+    let totalAlbums: Int?
+
+    var albumProgressFraction: Double? {
+        guard let totalAlbums, totalAlbums > 0 else { return nil }
+        return Double(min(completedAlbums, totalAlbums)) / Double(totalAlbums)
+    }
+
+    var completedDescription: String {
+        guard let totalAlbums else {
+            return phase.displayName
+        }
+        return "已加载 \(min(completedAlbums, totalAlbums))/\(totalAlbums) 张专辑"
+    }
+}
+
 struct ScanSnapshotSummary: Codable, Equatable, Sendable {
     let fileURL: URL
     let schemaVersion: Int
@@ -19,6 +54,14 @@ protocol ScanSnapshotStoring: Sendable {
     func replaceSnapshot(_ snapshot: ScanSnapshot, at fileURL: URL) async throws -> ScanSnapshotSummary
     func latestSnapshot(for library: LibraryRecord) async throws -> ScanSnapshotSummary?
     func loadSnapshot(at fileURL: URL, expectedLibrary: LibraryRecord) async throws -> ScanSnapshot
+}
+
+protocol StreamingScanSnapshotStoring: ScanSnapshotStoring {
+    func loadSnapshot(
+        at fileURL: URL,
+        expectedLibrary: LibraryRecord,
+        progress: @escaping @Sendable (ScanSnapshotLoadProgress) async -> Void
+    ) async throws -> ScanSnapshot
 }
 
 struct DisabledScanSnapshotStore: ScanSnapshotStoring {

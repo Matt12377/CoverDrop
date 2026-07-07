@@ -35,9 +35,9 @@ enum CoverImageStagingCache {
         }
     }
 
-    static let maxRemoteImageBytes = 20 * 1024 * 1024
+    nonisolated static let maxRemoteImageBytes = 20 * 1024 * 1024
 
-    static func stageImageData(
+    nonisolated static func stageImageData(
         _ data: Data,
         suggestedExtension: String? = nil
     ) throws -> URL {
@@ -53,7 +53,7 @@ enum CoverImageStagingCache {
         return stagedURL
     }
 
-    static func stageRemoteImage(at url: URL) async throws -> URL {
+    nonisolated static func stageRemoteImage(at url: URL) async throws -> URL {
         guard ["http", "https"].contains(url.scheme?.lowercased()) else {
             CoverDropDebugLog.write("封面下载：拒绝非 http/https URL：\(url.absoluteString)")
             throw Failure.unsupportedRemoteURL
@@ -122,7 +122,7 @@ enum CoverImageStagingCache {
         }
     }
 
-    static func remoteImageRequest(for url: URL) -> URLRequest {
+    nonisolated static func remoteImageRequest(for url: URL) -> URLRequest {
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = 30
@@ -141,7 +141,7 @@ enum CoverImageStagingCache {
         return request
     }
 
-    static func imageReferer(for url: URL) -> String? {
+    nonisolated static func imageReferer(for url: URL) -> String? {
         guard let host = url.host(percentEncoded: false)?.lowercased() else {
             return nil
         }
@@ -153,7 +153,7 @@ enum CoverImageStagingCache {
         return nil
     }
 
-    private static func validateImageData(_ data: Data) throws {
+    nonisolated private static func validateImageData(_ data: Data) throws {
         guard !data.isEmpty,
               let source = CGImageSourceCreateWithData(data as CFData, nil),
               CGImageSourceGetCount(source) > 0 else {
@@ -161,7 +161,7 @@ enum CoverImageStagingCache {
         }
     }
 
-    private static func pendingCoverDirectory() throws -> URL {
+    nonisolated private static func pendingCoverDirectory() throws -> URL {
         let baseURL = FileManager.default.urls(
             for: .cachesDirectory,
             in: .userDomainMask
@@ -181,7 +181,7 @@ enum CoverImageStagingCache {
         }
     }
 
-    private static func imageExtension(
+    nonisolated private static func imageExtension(
         from url: URL,
         mimeType: String?
     ) -> String {
@@ -206,7 +206,7 @@ enum CoverImageStagingCache {
         }
     }
 
-    private static func normalizedImageExtension(_ candidate: String?) -> String {
+    nonisolated private static func normalizedImageExtension(_ candidate: String?) -> String {
         let value = (candidate ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
@@ -228,12 +228,12 @@ enum CoverImageStagingCache {
         }
     }
 
-    private static func networkFailureDescription(for error: Error) -> String {
+    nonisolated private static func networkFailureDescription(for error: Error) -> String {
         let nsError = error as NSError
         return "\(nsError.domain) \(nsError.code)：\(nsError.localizedDescription)"
     }
 
-    private static func remoteDownloadFailureReason(
+    nonisolated private static func remoteDownloadFailureReason(
         statusCode: Int,
         url: URL,
         request: URLRequest,

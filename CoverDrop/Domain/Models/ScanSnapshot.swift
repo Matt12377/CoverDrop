@@ -31,6 +31,18 @@ extension ScanSnapshot {
         let rootPath: String
         let role: LibraryRole
 
+        nonisolated init(
+            id: UUID,
+            displayName: String,
+            rootPath: String,
+            role: LibraryRole
+        ) {
+            self.id = id
+            self.displayName = displayName
+            self.rootPath = rootPath
+            self.role = role
+        }
+
         nonisolated init(library: LibraryRecord) {
             id = library.id
             displayName = library.displayName
@@ -42,6 +54,14 @@ extension ScanSnapshot {
     struct Result: Codable, Equatable, Sendable {
         let albums: [Album]
         let looseAudioPaths: [String]
+
+        nonisolated init(
+            albums: [Album],
+            looseAudioPaths: [String]
+        ) {
+            self.albums = albums
+            self.looseAudioPaths = looseAudioPaths
+        }
 
         nonisolated init(result: LibraryScanResult) {
             albums = result.albums.map(Album.init(album:))
@@ -63,6 +83,22 @@ extension ScanSnapshot {
         let audioFiles: [AudioFile]
         let displayedCover: Cover?
         let issues: [Issue]
+
+        nonisolated init(
+            folderPath: String,
+            artistName: String,
+            albumName: String,
+            audioFiles: [AudioFile],
+            displayedCover: Cover?,
+            issues: [Issue]
+        ) {
+            self.folderPath = folderPath
+            self.artistName = artistName
+            self.albumName = albumName
+            self.audioFiles = audioFiles
+            self.displayedCover = displayedCover
+            self.issues = issues
+        }
 
         nonisolated init(album: AlbumScanRecord) {
             folderPath = album.folderURL.standardizedFileURL.path
@@ -92,6 +128,20 @@ extension ScanSnapshot {
         let metadata: Metadata?
         let readError: String?
 
+        nonisolated init(
+            path: String,
+            relativePath: String,
+            format: String,
+            metadata: Metadata?,
+            readError: String?
+        ) {
+            self.path = path
+            self.relativePath = relativePath
+            self.format = format
+            self.metadata = metadata
+            self.readError = readError
+        }
+
         nonisolated init(audioFile: AudioFileRecord) {
             path = audioFile.url.standardizedFileURL.path
             relativePath = audioFile.relativePath
@@ -120,6 +170,26 @@ extension ScanSnapshot {
         let trackNumber: Int?
         let durationSeconds: Int?
         let embeddedArtworkPath: String?
+
+        nonisolated init(
+            title: String?,
+            artist: String?,
+            albumArtist: String?,
+            album: String?,
+            discNumber: Int?,
+            trackNumber: Int?,
+            durationSeconds: Int?,
+            embeddedArtworkPath: String?
+        ) {
+            self.title = title
+            self.artist = artist
+            self.albumArtist = albumArtist
+            self.album = album
+            self.discNumber = discNumber
+            self.trackNumber = trackNumber
+            self.durationSeconds = durationSeconds
+            self.embeddedArtworkPath = embeddedArtworkPath
+        }
 
         nonisolated init(metadata: AudioMetadata) {
             title = metadata.title
@@ -153,6 +223,22 @@ extension ScanSnapshot {
         let namePriority: Int
         let depth: Int
         let source: Source
+
+        nonisolated init(
+            path: String,
+            previewPath: String?,
+            relativePath: String,
+            namePriority: Int,
+            depth: Int,
+            source: Source
+        ) {
+            self.path = path
+            self.previewPath = previewPath
+            self.relativePath = relativePath
+            self.namePriority = namePriority
+            self.depth = depth
+            self.source = source
+        }
 
         nonisolated init(cover: CoverCandidate) {
             path = cover.url.standardizedFileURL.path
@@ -212,6 +298,18 @@ extension ScanSnapshot {
         let paths: [String]?
         let reason: String?
 
+        nonisolated init(
+            kind: Kind,
+            hasCue: Bool?,
+            paths: [String]?,
+            reason: String?
+        ) {
+            self.kind = kind
+            self.hasCue = hasCue
+            self.paths = paths
+            self.reason = reason
+        }
+
         nonisolated init(issue: AlbumScanIssue) {
             switch issue {
             case .singleFileNeedsConfirmation(let hasCue):
@@ -265,6 +363,14 @@ extension ScanSnapshot {
         let status: Status?
 
         nonisolated init(
+            suggestionsByAlbumPath: [String: Suggestion],
+            status: Status?
+        ) {
+            self.suggestionsByAlbumPath = suggestionsByAlbumPath
+            self.status = status
+        }
+
+        nonisolated init(
             suggestionsByAlbumID: [AlbumScanRecord.ID: AlbumNameSuggestion],
             status: AlbumNameEnhancementStatus?
         ) {
@@ -281,6 +387,14 @@ extension ScanSnapshot {
         let artistName: String
         let albumName: String
 
+        nonisolated init(
+            artistName: String,
+            albumName: String
+        ) {
+            self.artistName = artistName
+            self.albumName = albumName
+        }
+
         nonisolated init(suggestion: AlbumNameSuggestion) {
             artistName = suggestion.artistName
             albumName = suggestion.albumName
@@ -294,6 +408,14 @@ extension ScanSnapshot {
     struct Status: Codable, Equatable, Sendable {
         let isRunning: Bool
         let lastErrorMessage: String?
+
+        nonisolated init(
+            isRunning: Bool,
+            lastErrorMessage: String?
+        ) {
+            self.isRunning = isRunning
+            self.lastErrorMessage = lastErrorMessage
+        }
 
         nonisolated init(status: AlbumNameEnhancementStatus) {
             isRunning = status.isRunning

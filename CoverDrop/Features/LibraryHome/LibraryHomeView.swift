@@ -244,15 +244,17 @@ struct LibraryHomeView: View {
     }
 
     private func scanSnapshotLoadingPage(library: LibraryRecord) -> some View {
-        VStack(spacing: 12) {
-            Text("正在加载上次扫描结果")
+        let progress = appModel.scanSnapshotLoadProgress(for: library.id)
+
+        return VStack(spacing: 12) {
+            Text(progress?.phase.displayName ?? "正在加载上次扫描结果")
                 .font(.callout.weight(.medium))
                 .foregroundStyle(LibraryHomeDesignToken.textSecondary)
 
-            ScanProgressBar(fraction: nil)
+            ScanProgressBar(fraction: progress?.albumProgressFraction)
                 .frame(width: 260, height: 6)
 
-            Text(appModel.scanSnapshotMessage(for: library.id) ?? "正在读取历史快照…")
+            Text(progress?.completedDescription ?? appModel.scanSnapshotMessage(for: library.id) ?? "正在读取历史快照…")
                 .font(.caption)
                 .foregroundStyle(LibraryHomeDesignToken.textTertiary)
                 .lineLimit(1)

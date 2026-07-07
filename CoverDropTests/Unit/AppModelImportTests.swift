@@ -277,7 +277,7 @@ struct AppModelImportTests {
             let album = makeAlbum(folderURL: albumFolder, albumName: "Album")
             let appModel = await makeScannedAppModel(root: root, albums: [album])
 
-            let didStage = appModel.stageCoverImageData(
+            let didStage = await appModel.stageCoverImageData(
                 try validPNGData(),
                 suggestedExtension: "png",
                 forAlbumID: album.id
@@ -300,7 +300,7 @@ struct AppModelImportTests {
             let album = makeAlbum(folderURL: albumFolder, albumName: "Album")
             let appModel = await makeScannedAppModel(root: root, albums: [album])
 
-            let didStage = appModel.stageCoverImageData(
+            let didStage = await appModel.stageCoverImageData(
                 Data("这不是图片".utf8),
                 suggestedExtension: "jpg",
                 forAlbumID: album.id
@@ -374,6 +374,7 @@ struct AppModelImportTests {
             let cover = try #require(appModel.albumInSelectedLibrary(id: album.id)?.displayedCover)
             #expect(cover.source == .file)
             #expect(cover.url == existingCoverURL)
+            #expect(appModel.scanResultForSelectedLibrary?.albums.first?.displayedCover == cover)
             await waitUntil {
                 appModel.albumInSelectedLibrary(id: album.id)?.displayedCover?.previewURL != nil
             }
@@ -403,6 +404,7 @@ struct AppModelImportTests {
             #expect(!FileManager.default.fileExists(atPath: discFolder.appendingPathComponent("cover.jpg").path))
             let cover = try #require(appModel.albumInSelectedLibrary(id: album.id)?.displayedCover)
             #expect(cover.url == albumFolder.appendingPathComponent("cover.jpg"))
+            #expect(appModel.scanResultForSelectedLibrary?.albums.first?.displayedCover == cover)
             await waitUntil {
                 appModel.albumInSelectedLibrary(id: album.id)?.displayedCover?.previewURL != nil
             }
@@ -410,6 +412,38 @@ struct AppModelImportTests {
             let previewURL = try #require(refreshedCover.previewURL)
             #expect(refreshedCover.displayURL == previewURL)
             #expect(FileManager.default.fileExists(atPath: previewURL.path))
+        }
+    }
+
+    @Test("保存封面期间重复点击不会并发写入")
+    func savingCoverIgnoresDuplicateRequestsWhileWriteIsRunning() async throws {
+        try await withTemporaryDirectory { root in
+            let albumFolder = root.appendingPathComponent("Artist/Album", isDirectory: true)
+            let sourceURL = root.appendingPathComponent("source.png")
+            try FileManager.default.createDirectory(at: albumFolder, withIntermediateDirectories: true)
+            try writeValidPNG(to: sourceURL)
+            let album = makeAlbum(folderURL: albumFolder, albumName: "Album")
+            let writer = DelayedCountingCoverImageWriter(delayNanoseconds: 120_000_000)
+            let appModel = await makeScannedAppModel(
+                root: root,
+                albums: [album],
+                coverImageWriter: writer
+            )
+
+            appModel.stageCoverImage(sourceURL, forAlbumID: album.id)
+            async let firstSave = appModel.savePendingCoverImage(forAlbumID: album.id)
+            await waitUntil {
+                appModel.isSavingCoverImage(for: album.id)
+            }
+
+            let secondSave = await appModel.savePendingCoverImage(forAlbumID: album.id)
+            let firstResult = await firstSave
+
+            #expect(firstResult)
+            #expect(!secondSave)
+            #expect(await writer.writeCount() == 1)
+            #expect(!appModel.isSavingCoverImage(for: album.id))
+            #expect(appModel.pendingCoverURL(for: album.id) == nil)
         }
     }
 
@@ -1157,6 +1191,28 @@ private struct StubCoverImageWriter: CoverImageWriting {
     }
 }
 
+private actor DelayedCountingCoverImageWriter: CoverImageWriting {
+    private let delayNanoseconds: UInt64
+    private var count = 0
+
+    init(delayNanoseconds: UInt64) {
+        self.delayNanoseconds = delayNanoseconds
+    }
+
+    func writeCoverImage(
+        from sourceURL: URL,
+        toAlbumFolder albumFolderURL: URL
+    ) async throws -> URL {
+        count += 1
+        try await Task.sleep(nanoseconds: delayNanoseconds)
+        return albumFolderURL.appendingPathComponent("cover.jpg")
+    }
+
+    func writeCount() -> Int {
+        count
+    }
+}
+
 private actor RecordingCoverDetector: CoverDetecting {
     private let result: CoverDetectionResult
     private var count = 0
@@ -1647,6 +1703,7 @@ private actor ScanGate {
 private func makeScannedAppModel(
     root: URL,
     albums: [AlbumScanRecord],
+    coverImageWriter: any CoverImageWriting = ImageIOCoverImageWriter(),
     albumNameSuggesting: any AlbumNameSuggesting = DisabledAlbumNameSuggesting()
 ) async -> AppModel {
     let store = MemoryLibraryStore()
@@ -1658,7 +1715,7 @@ private func makeScannedAppModel(
             albums: albums,
             looseAudioPaths: []
         )),
-        coverImageWriter: ImageIOCoverImageWriter(),
+        coverImageWriter: coverImageWriter,
         albumNameSuggesting: albumNameSuggesting
     )
     let appModel = AppModel(environment: environment)
