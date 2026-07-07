@@ -10,7 +10,11 @@ struct AppEnvironment: Sendable {
     let folderAccess: any FolderAccessing
     let roleProber: any DirectoryRoleProbing
     let libraryScanner: any LibraryScanning
+    let libraryChangeMonitor: any LibraryChangeMonitoring
     let coverImageWriter: any CoverImageWriting
+    let coverDetector: any CoverDetecting
+    let albumNameSuggesting: any AlbumNameSuggesting
+    let scanSnapshotStore: any ScanSnapshotStoring
 
     init(
         configuration: AppConfiguration = .live,
@@ -18,14 +22,22 @@ struct AppEnvironment: Sendable {
         folderAccess: any FolderAccessing,
         roleProber: any DirectoryRoleProbing,
         libraryScanner: any LibraryScanning,
-        coverImageWriter: any CoverImageWriting
+        libraryChangeMonitor: any LibraryChangeMonitoring = DisabledLibraryChangeMonitor(),
+        coverImageWriter: any CoverImageWriting,
+        coverDetector: any CoverDetecting = ImageIOCoverDetector(),
+        albumNameSuggesting: any AlbumNameSuggesting = DisabledAlbumNameSuggesting(),
+        scanSnapshotStore: any ScanSnapshotStoring = DisabledScanSnapshotStore()
     ) {
         self.configuration = configuration
         self.libraryStore = libraryStore
         self.folderAccess = folderAccess
         self.roleProber = roleProber
         self.libraryScanner = libraryScanner
+        self.libraryChangeMonitor = libraryChangeMonitor
         self.coverImageWriter = coverImageWriter
+        self.coverDetector = coverDetector
+        self.albumNameSuggesting = albumNameSuggesting
+        self.scanSnapshotStore = scanSnapshotStore
     }
 
     static let live: AppEnvironment = {
@@ -40,7 +52,18 @@ struct AppEnvironment: Sendable {
                 coverDetector: ImageIOCoverDetector(),
                 maxConcurrentAlbums: configuration.scan.maxConcurrentAlbums
             ),
-            coverImageWriter: ImageIOCoverImageWriter()
+            libraryChangeMonitor: FSEventsLibraryChangeMonitor(),
+            coverImageWriter: ImageIOCoverImageWriter(),
+            coverDetector: ImageIOCoverDetector(),
+            albumNameSuggesting: OllamaAlbumNameSuggesting(
+                baseURL: configuration.localLLM.baseURL,
+                model: configuration.localLLM.model,
+                requestTimeoutSeconds: configuration.localLLM.requestTimeoutSeconds,
+                keepAlive: configuration.localLLM.batchKeepAlive
+            ),
+            scanSnapshotStore: FileScanSnapshotStore(
+                directoryURL: configuration.scanDatabases.directoryURL
+            )
         )
     }()
 }

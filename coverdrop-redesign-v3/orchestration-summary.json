@@ -1,0 +1,17 @@
+{
+  "project": {
+    "name": "CoverDrop UI 优化 V3",
+    "path": "/Users/yihe/Swift/CoverDrop/coverdrop-redesign-v3",
+    "operation": "create",
+    "deviceType": "desktop",
+    "language": "zh-CN",
+    "dashboardMode": false,
+    "designRead": "macOS dark mode SwiftUI app / music cover management / preserve existing layout / optimize interaction flow",
+    "designDials": {
+      "layoutVariance": 1,
+      "motionIntensity": 1,
+      "visualDensity": 3
+    },
+    "styleDefinitionBrief": "Dark mode macOS native SwiftUI app. Preserve user's existing sidebar+grid+sheet structure. Optimize interaction flow: smarter search, better feedback, cleaner detail sheets."
+  }
+}

@@ -64,6 +64,20 @@ struct StructureRoleProberTests {
         }
     }
 
+    @Test("扩展名像音频的文件夹不会被当成音频")
+    func audioExtensionDirectoryIsNotAudioFile() async throws {
+        try await withTemporaryDirectory { root in
+            try FileManager.default.createDirectory(
+                at: root.appendingPathComponent("不是音频.flac", isDirectory: true),
+                withIntermediateDirectories: true
+            )
+
+            await #expect(throws: LibraryImportError.noAudioFound) {
+                try await StructureRoleProber().suggestRole(for: root)
+            }
+        }
+    }
+
     private func withTemporaryDirectory(
         _ operation: (URL) async throws -> Void
     ) async throws {

@@ -1,0 +1,81 @@
+{
+  "data": [
+    {
+      "id": "page-sidebar-home",
+      "title": "侧边栏与首页",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1719513600000,
+      "canvasData": {
+        "x": 0,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/sidebar-home.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-cover-wall",
+      "title": "封面墙",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1719513600000,
+      "canvasData": {
+        "x": 620,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/cover-wall.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-album-detail",
+      "title": "专辑详情弹窗",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1719513600000,
+      "canvasData": {
+        "x": 1240,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/album-detail.html",
+        "interactions": []
+      }
+    },
+    {
+      "id": "page-cover-search",
+      "title": "搜索封面弹窗",
+      "type": "page",
+      "version": 1,
+      "createdAt": 1719513600000,
+      "canvasData": {
+        "x": 1860,
+        "y": 0,
+        "group": 0
+      },
+      "devMetadata": {
+        "htmlSrc": "pages/cover-search.html",
+        "interactions": []
+      }
+    }
+  ],
+  "config": {
+    "autoLayout": true,
+    "deviceType": "desktop",
+    "projectName": "CoverDrop UI 优化 V3",
+    "designLibrary": {
+      "name": "苹果",
+      "id": "dl_builtin_apple",
+      "version": null,
+      "scope": "built-in-global",
+      "path": "/Users/yihe/.trae-cn/design_libraries/dl_builtin_apple",
+      "versionSource": "metadata.json"
+    }
+  }
+}

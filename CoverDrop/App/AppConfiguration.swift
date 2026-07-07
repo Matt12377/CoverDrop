@@ -5,22 +5,84 @@ import Foundation
 /// 先用 Swift 配置文件管理，便于编译期测试和代码审查。
 /// 后续如果需要让用户在界面里修改，再把这里接到持久化设置。
 struct AppConfiguration: Equatable, Sendable {
+    struct LocalLLM: Equatable, Sendable {
+        let isEnabled: Bool
+        let baseURL: String
+        let model: String
+        let requestTimeoutSeconds: TimeInterval
+        let maxTracksPerAlbum: Int
+        let enhanceCoveredAlbums: Bool
+        let batchKeepAlive: String?
+        let unloadAfterBatch: Bool
+
+        init(
+            isEnabled: Bool = true,
+            baseURL: String = "http://127.0.0.1:11434",
+            model: String = "qwen3.5:4b-mlx",
+            requestTimeoutSeconds: TimeInterval = 300,
+            maxTracksPerAlbum: Int = 12,
+            enhanceCoveredAlbums: Bool = false,
+            batchKeepAlive: String? = "30s",
+            unloadAfterBatch: Bool = true
+        ) {
+            self.isEnabled = isEnabled
+            self.baseURL = baseURL
+            self.model = model
+            self.requestTimeoutSeconds = max(1, requestTimeoutSeconds)
+            self.maxTracksPerAlbum = max(1, maxTracksPerAlbum)
+            self.enhanceCoveredAlbums = enhanceCoveredAlbums
+            self.batchKeepAlive = batchKeepAlive
+            self.unloadAfterBatch = unloadAfterBatch
+        }
+    }
+
     struct Scan: Equatable, Sendable {
         /// 同时扫描的专辑数量。
         ///
         /// 当前音乐库位于 SMB 网络共享时，瓶颈通常是 NAS/网络/小文件 I/O，
-        /// 不是 Mac CPU。默认 4 更保守，适合长时间稳定扫描。
+        /// 不是 Mac CPU。默认 8 能更充分利用等待 I/O 的时间，同时仍限制峰值压力。
         let maxConcurrentAlbums: Int
 
         static let minimumConcurrentAlbums = 1
-        static let defaultConcurrentAlbums = 4
-        static let maximumConcurrentAlbums = 16
+        static let defaultConcurrentAlbums = 8
+        static let maximumConcurrentAlbums = 24
 
         init(maxConcurrentAlbums: Int = Self.defaultConcurrentAlbums) {
             self.maxConcurrentAlbums = max(
                 Self.minimumConcurrentAlbums,
                 min(maxConcurrentAlbums, Self.maximumConcurrentAlbums)
             )
+        }
+    }
+
+    struct ScanDatabases: Equatable, Sendable {
+        let directoryURL: URL
+
+        init(directoryURL: URL = Self.defaultDirectoryURL) {
+            self.directoryURL = directoryURL
+        }
+
+        static var defaultDirectoryURL: URL {
+            let applicationSupportURL = FileManager.default.urls(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask
+            )[0]
+            return applicationSupportURL
+                .appendingPathComponent("CoverDrop", isDirectory: true)
+                .appendingPathComponent("ScanDatabases", isDirectory: true)
+        }
+    }
+
+    struct RealtimeScanRefresh: Equatable, Sendable {
+        let isEnabled: Bool
+        let debounceSeconds: TimeInterval
+
+        init(
+            isEnabled: Bool = true,
+            debounceSeconds: TimeInterval = 2.5
+        ) {
+            self.isEnabled = isEnabled
+            self.debounceSeconds = max(0.1, debounceSeconds)
         }
     }
 
@@ -85,6 +147,11 @@ struct AppConfiguration: Equatable, Sendable {
                 urlTemplate: "https://search.douban.com/music/subject_search?search_text={query}&cat=1003"
             ),
             CoverSearchSource(
+                id: "isearchAlbums",
+                displayName: "iSearch 专辑",
+                urlTemplate: "https://i.oppsu.cn/?q={query}&country=CN&media=music&entity=album"
+            ),
+            CoverSearchSource(
                 id: "bingImages",
                 displayName: "Bing 图片",
                 urlTemplate: "https://www.bing.com/images/search?q={query}%20%E5%B0%81%E9%9D%A2"
@@ -98,14 +165,23 @@ struct AppConfiguration: Equatable, Sendable {
     }
 
     let scan: Scan
+    let scanDatabases: ScanDatabases
+    let realtimeScanRefresh: RealtimeScanRefresh
     let coverSearch: CoverSearch
+    let localLLM: LocalLLM
 
     init(
         scan: Scan = Scan(),
-        coverSearch: CoverSearch = CoverSearch()
+        scanDatabases: ScanDatabases = ScanDatabases(),
+        realtimeScanRefresh: RealtimeScanRefresh = RealtimeScanRefresh(),
+        coverSearch: CoverSearch = CoverSearch(),
+        localLLM: LocalLLM = LocalLLM()
     ) {
         self.scan = scan
+        self.scanDatabases = scanDatabases
+        self.realtimeScanRefresh = realtimeScanRefresh
         self.coverSearch = coverSearch
+        self.localLLM = localLLM
     }
 
     static let live = AppConfiguration()

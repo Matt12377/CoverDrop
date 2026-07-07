@@ -69,6 +69,25 @@ struct AlbumScanResultFilterTests {
         #expect(AlbumScanResultFiltering.looseAudioPaths(in: result, filter: .looseAudio, query: "") == ["根目录散曲.dsf"])
     }
 
+    @Test("增强后的歌手和专辑名也会参与搜索筛选")
+    func queryMatchesEnhancedDisplayNames() {
+        let result = LibraryScanResult(
+            albums: [album("原始专辑", artist: "原始歌手", cover: true)],
+            looseAudioPaths: []
+        )
+
+        let filtered = AlbumScanResultFiltering.albums(
+            in: result,
+            filter: .all,
+            query: "增强后专辑",
+            displayNames: { _ in
+                (artistName: "增强后歌手", albumName: "增强后专辑")
+            }
+        )
+
+        #expect(filtered.map(\.albumName) == ["原始专辑"])
+    }
+
     private func album(
         _ name: String,
         artist: String = "测试歌手",

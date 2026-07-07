@@ -1,5 +1,5 @@
 import Foundation
 
 protocol DirectoryRoleProbing: Sendable {
-    func suggestRole(for url: URL) async throws -> DirectoryRoleSuggestion
+    nonisolated func suggestRole(for url: URL) async throws -> DirectoryRoleSuggestion
 }

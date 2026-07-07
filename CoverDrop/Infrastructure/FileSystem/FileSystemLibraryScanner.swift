@@ -1,8 +1,8 @@
 import Foundation
 import OSLog
 
-struct FileSystemLibraryScanner: LibraryScanning {
-    private static let logger = Logger(subsystem: "com.yihe.CoverDrop", category: "音乐库扫描")
+struct FileSystemLibraryScanner: LibraryScanning, AlbumRescanning {
+    nonisolated private static let logger = Logger(subsystem: "com.yihe.CoverDrop", category: "音乐库扫描")
 
     private let metadataReader: any AudioMetadataReading
     private let coverDetector: any CoverDetecting
@@ -18,7 +18,7 @@ struct FileSystemLibraryScanner: LibraryScanning {
         self.maxConcurrentAlbums = Swift.max(1, maxConcurrentAlbums)
     }
 
-    func scan(
+    nonisolated func scan(
         libraryURL: URL,
         role: LibraryRole,
         progress: @escaping LibraryScanProgressHandler
@@ -38,8 +38,13 @@ struct FileSystemLibraryScanner: LibraryScanning {
 
         do {
             let discoveryStartedAt = Date()
+            let maxConcurrentAlbums = maxConcurrentAlbums
             let boundaries = try await Task.detached(priority: .userInitiated) {
-                try Self.discoverBoundaries(root: libraryURL, role: role)
+                try await Self.discoverBoundaries(
+                    root: libraryURL,
+                    role: role,
+                    maxConcurrentArtistDiscovery: maxConcurrentAlbums
+                )
             }.value
             Self.logger.notice(
                 "[扫描][目录分析完成] 专辑=\(boundaries.albums.count) 散落音频=\(boundaries.looseAudioPaths.count) 耗时=\(Self.formatDuration(since: discoveryStartedAt), privacy: .public)"
@@ -82,7 +87,36 @@ struct FileSystemLibraryScanner: LibraryScanning {
         }
     }
 
-    private func scanAlbumsConcurrently(
+    nonisolated func rescanAlbum(
+        _ album: AlbumScanRecord,
+        progress: @escaping LibraryScanProgressHandler
+    ) async throws -> AlbumScanRecord {
+        await progress(LibraryScanProgress(
+            phase: .readingMetadata,
+            targetPath: album.folderURL.path,
+            completedAlbums: 0,
+            totalAlbums: 1,
+            completedFilesInAlbum: nil,
+            totalFilesInAlbum: nil
+        ))
+        let progressReporter = ScanProgressReporter(totalAlbums: 1, progress: progress)
+        let boundary = AlbumBoundary(
+            folderURL: album.folderURL,
+            artistName: album.artistName,
+            albumName: album.albumName,
+            issues: Self.boundaryIssuesRetainedDuringAlbumRescan(from: album)
+        )
+        let rescanned = try await scanAlbum(
+            boundary,
+            albumNumber: 1,
+            totalAlbums: 1,
+            progressReporter: progressReporter
+        )
+        await progressReporter.flush()
+        return rescanned
+    }
+
+    nonisolated private func scanAlbumsConcurrently(
         _ boundaries: [AlbumBoundary],
         progress: @escaping LibraryScanProgressHandler
     ) async throws -> [AlbumScanRecord] {
@@ -128,22 +162,36 @@ struct FileSystemLibraryScanner: LibraryScanning {
             }
         }
 
+        await progressReporter.flush()
+
         return albums
     }
 
-    private func scanAlbum(
+    nonisolated private func scanAlbum(
         _ boundary: AlbumBoundary,
         albumNumber: Int,
         totalAlbums: Int,
         progressReporter: ScanProgressReporter
     ) async throws -> AlbumScanRecord {
         let albumStartedAt = Date()
-        let audioURLs = Self.recursiveAudioFiles(in: boundary.folderURL)
+        let audioURLs = boundary.audioFileURLs ?? Self.recursiveAudioFiles(in: boundary.folderURL)
         Self.logger.info(
             "[扫描][专辑 \(albumNumber)/\(totalAlbums)] \(boundary.artistName, privacy: .public) / \(boundary.albumName, privacy: .public) 音频=\(audioURLs.count)"
         )
         var audioFiles: [AudioFileRecord] = []
         var failedPaths: [String] = []
+
+        await progressReporter.report(
+            phase: .detectingCover,
+            targetPath: boundary.folderURL.path,
+            completedFilesInAlbum: nil,
+            totalFilesInAlbum: audioURLs.count
+        )
+        Self.logger.debug("[扫描][封面] \(boundary.folderURL.path, privacy: .public)")
+        let coverStartedAt = Date()
+        let coverResult = try await coverDetector.detectCover(in: boundary.folderURL)
+        let coverElapsed = Self.formatDuration(since: coverStartedAt)
+        let shouldReadEmbeddedArtwork = coverResult.selected.isNil
 
         let metadataStartedAt = Date()
         for (fileIndex, audioURL) in audioURLs.enumerated() {
@@ -158,7 +206,10 @@ struct FileSystemLibraryScanner: LibraryScanning {
             )
             let relativePath = Self.relativePath(of: audioURL, under: boundary.folderURL)
             do {
-                let metadata = try await metadataReader.readMetadata(at: audioURL)
+                let metadata = try await metadataReader.readMetadata(
+                    at: audioURL,
+                    includingEmbeddedArtwork: shouldReadEmbeddedArtwork
+                )
                 audioFiles.append(AudioFileRecord(
                     url: audioURL,
                     relativePath: relativePath,
@@ -182,17 +233,7 @@ struct FileSystemLibraryScanner: LibraryScanning {
         }
         let metadataElapsed = Self.formatDuration(since: metadataStartedAt)
 
-        await progressReporter.report(
-            phase: .detectingCover,
-            targetPath: boundary.folderURL.path,
-            completedFilesInAlbum: audioURLs.count,
-            totalFilesInAlbum: audioURLs.count
-        )
-        Self.logger.debug("[扫描][封面] \(boundary.folderURL.path, privacy: .public)")
-        let coverStartedAt = Date()
-        let coverResult = try await coverDetector.detectCover(in: boundary.folderURL)
-        let coverElapsed = Self.formatDuration(since: coverStartedAt)
-        let embeddedArtworkCover = coverResult.selected == nil
+        let embeddedArtworkCover = coverResult.selected.isNil
             ? Self.firstEmbeddedArtworkCover(in: audioFiles)
             : nil
         let displayedCover = coverResult.selected ?? embeddedArtworkCover
@@ -219,7 +260,7 @@ struct FileSystemLibraryScanner: LibraryScanning {
         if !trackNamedPaths.isEmpty {
             issues.append(.trackNamedAudioFiles(paths: trackNamedPaths))
         }
-        if coverResult.selected == nil, !coverResult.invalidNamedPaths.isEmpty {
+        if coverResult.selected.isNil, !coverResult.invalidNamedPaths.isEmpty {
             issues.append(.invalidNamedCovers(paths: coverResult.invalidNamedPaths))
         }
 
@@ -240,18 +281,21 @@ struct FileSystemLibraryScanner: LibraryScanning {
 
     nonisolated private static func discoverBoundaries(
         root: URL,
-        role: LibraryRole
-    ) throws -> DiscoveredBoundaries {
+        role: LibraryRole,
+        maxConcurrentArtistDiscovery: Int
+    ) async throws -> DiscoveredBoundaries {
         switch role {
         case .album:
-            guard !recursiveAudioFiles(in: root).isEmpty else {
+            let audioFileURLs = recursiveAudioFiles(in: root)
+            guard !audioFileURLs.isEmpty else {
                 throw LibraryScanError.noAlbumsFound
             }
             return DiscoveredBoundaries(
                 albums: [AlbumBoundary(
                     folderURL: root,
                     artistName: root.deletingLastPathComponent().lastPathComponent,
-                    albumName: root.lastPathComponent
+                    albumName: root.lastPathComponent,
+                    audioFileURLs: audioFileURLs
                 )],
                 looseAudioPaths: []
             )
@@ -267,12 +311,17 @@ struct FileSystemLibraryScanner: LibraryScanning {
         case .library:
             var albums: [AlbumBoundary] = []
             var loose: [String] = directAudioFiles(in: root).map { relativePath(of: $0, under: root) }
+            let artistURLs = try childDirectories(of: root)
+            let artistResults = try await discoverArtistRootsConcurrently(
+                artistURLs,
+                maxConcurrentArtistDiscovery: maxConcurrentArtistDiscovery
+            )
 
-            for artistURL in try childDirectories(of: root) {
-                let discovered = try discoverArtistRoot(
-                    artistURL,
-                    artistName: artistName(forArtistRoot: artistURL, fallback: artistURL.lastPathComponent)
-                )
+            for artistResult in artistResults.sorted(by: {
+                $0.artistURL.path.localizedStandardCompare($1.artistURL.path) == .orderedAscending
+            }) {
+                let artistURL = artistResult.artistURL
+                let discovered = artistResult.discovered
                 albums.append(contentsOf: discovered.albums)
                 loose.append(contentsOf: discovered.looseAudioPaths.map {
                     artistURL.lastPathComponent + "/" + $0
@@ -284,30 +333,92 @@ struct FileSystemLibraryScanner: LibraryScanning {
         }
     }
 
+    nonisolated private static func discoverArtistRootsConcurrently(
+        _ artistURLs: [URL],
+        maxConcurrentArtistDiscovery: Int
+    ) async throws -> [ArtistDiscoveryResult] {
+        guard !artistURLs.isEmpty else { return [] }
+
+        let concurrentLimit = Swift.min(
+            Swift.max(1, maxConcurrentArtistDiscovery),
+            artistURLs.count
+        )
+        var results: [ArtistDiscoveryResult] = []
+        results.reserveCapacity(artistURLs.count)
+
+        try await withThrowingTaskGroup(of: ArtistDiscoveryResult.self) { group in
+            var nextIndex = 0
+
+            while nextIndex < concurrentLimit {
+                let artistURL = artistURLs[nextIndex]
+                nextIndex += 1
+                group.addTask {
+                    ArtistDiscoveryResult(
+                        artistURL: artistURL,
+                        discovered: try discoverArtistRoot(
+                            artistURL,
+                            artistName: artistName(
+                                forArtistRoot: artistURL,
+                                fallback: artistURL.lastPathComponent
+                            )
+                        )
+                    )
+                }
+            }
+
+            while let result = try await group.next() {
+                results.append(result)
+
+                if nextIndex < artistURLs.count {
+                    let artistURL = artistURLs[nextIndex]
+                    nextIndex += 1
+                    group.addTask {
+                        ArtistDiscoveryResult(
+                            artistURL: artistURL,
+                            discovered: try discoverArtistRoot(
+                                artistURL,
+                                artistName: artistName(
+                                    forArtistRoot: artistURL,
+                                    fallback: artistURL.lastPathComponent
+                                )
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        return results
+    }
+
     nonisolated private static func discoverArtistRoot(
         _ root: URL,
         artistName: String
     ) throws -> DiscoveredBoundaries {
         let audioDirectories = try directAudioDirectories(in: root).filter {
-            !isSameFileURL($0, root)
+            !isSameFileURL($0.url, root)
         }
         var albumsByPath: [String: AlbumBoundary] = [:]
 
         for audioDirectory in audioDirectories {
             let albumRoot = try albumRoot(
-                forAudioDirectory: audioDirectory,
+                forAudioDirectory: audioDirectory.url,
                 artistRoot: root
             )
             guard !isSameFileURL(albumRoot, root) else { continue }
 
             let key = canonicalPath(albumRoot)
-            guard albumsByPath[key] == nil else { continue }
-            albumsByPath[key] = AlbumBoundary(
-                folderURL: albumRoot,
-                artistName: artistName,
-                albumName: albumRoot.lastPathComponent,
-                issues: boundaryIssues(forAlbumRoot: albumRoot, artistRoot: root)
-            )
+            if let existing = albumsByPath[key] {
+                albumsByPath[key] = existing.appendingAudioFileURLs(audioDirectory.audioFileURLs)
+            } else {
+                albumsByPath[key] = AlbumBoundary(
+                    folderURL: albumRoot,
+                    artistName: artistName,
+                    albumName: albumRoot.lastPathComponent,
+                    issues: boundaryIssues(forAlbumRoot: albumRoot, artistRoot: root),
+                    audioFileURLs: audioDirectory.audioFileURLs
+                )
+            }
         }
 
         let albums = albumsByPath.values.sorted {
@@ -368,12 +479,16 @@ struct FileSystemLibraryScanner: LibraryScanning {
             || normalized.range(of: #"\d+張"#, options: .regularExpression) != nil
     }
 
-    nonisolated private static func directAudioDirectories(in root: URL) throws -> [URL] {
-        var directories: [URL] = []
+    nonisolated private static func directAudioDirectories(in root: URL) throws -> [DirectAudioDirectory] {
+        var directories: [DirectAudioDirectory] = []
 
         func collect(from directory: URL) throws {
-            if !directAudioFiles(in: directory).isEmpty {
-                directories.append(directory)
+            let audioFileURLs = directAudioFiles(in: directory)
+            if !audioFileURLs.isEmpty {
+                directories.append(DirectAudioDirectory(
+                    url: directory,
+                    audioFileURLs: audioFileURLs
+                ))
             }
             for child in try childDirectories(of: directory) {
                 try collect(from: child)
@@ -382,7 +497,7 @@ struct FileSystemLibraryScanner: LibraryScanning {
 
         try collect(from: root)
         return directories.sorted {
-            $0.path.localizedStandardCompare($1.path) == .orderedAscending
+            $0.url.path.localizedStandardCompare($1.url.path) == .orderedAscending
         }
     }
 
@@ -398,6 +513,10 @@ struct FileSystemLibraryScanner: LibraryScanning {
 
         if isStructuralLayer(audioDirectory.lastPathComponent)
             || isTrackFolderLayer(audioDirectory, parent: parent) {
+            return parent
+        }
+
+        if isPlainNumberedDiscLayer(audioDirectory, parent: parent, artistRoot: artistRoot) {
             return parent
         }
 
@@ -420,6 +539,17 @@ struct FileSystemLibraryScanner: LibraryScanning {
         )]
     }
 
+    nonisolated private static func boundaryIssuesRetainedDuringAlbumRescan(
+        from album: AlbumScanRecord
+    ) -> [AlbumScanIssue] {
+        album.issues.compactMap { issue in
+            if case .uncertainAlbumBoundary = issue {
+                return issue
+            }
+            return nil
+        }
+    }
+
     nonisolated private static func versionSiblingCount(around directory: URL) throws -> Int {
         let parent = directory.deletingLastPathComponent()
         return try childDirectories(of: parent).filter { sibling in
@@ -430,6 +560,36 @@ struct FileSystemLibraryScanner: LibraryScanning {
 
     nonisolated private static func isStructuralLayer(_ name: String) -> Bool {
         isDiscLayerName(name) || isFormatLayerName(name)
+    }
+
+    nonisolated private static func isPlainNumberedDiscLayer(
+        _ directory: URL,
+        parent: URL,
+        artistRoot: URL
+    ) -> Bool {
+        guard !isSameFileURL(parent, artistRoot),
+              isPlainNumberedDiscName(directory.lastPathComponent) else {
+            return false
+        }
+
+        guard let numberedSiblings = try? childDirectories(of: parent).filter({
+            !directAudioFiles(in: $0).isEmpty && isPlainNumberedDiscName($0.lastPathComponent)
+        }),
+              numberedSiblings.count >= 2 else {
+            return false
+        }
+
+        return numberedSiblings.contains(where: { isSameFileURL($0, directory) })
+    }
+
+    nonisolated private static func isPlainNumberedDiscName(_ name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (1...2).contains(trimmed.count),
+              let value = Int(trimmed),
+              value > 0 else {
+            return false
+        }
+        return trimmed.allSatisfy(\.isNumber)
     }
 
     nonisolated private static func isDiscLayerName(_ name: String) -> Bool {
@@ -571,7 +731,12 @@ struct FileSystemLibraryScanner: LibraryScanning {
     }
 
     nonisolated private static func isAudioFile(_ url: URL) -> Bool {
-        audioExtensions.contains(url.pathExtension.lowercased())
+        guard audioExtensions.contains(url.pathExtension.lowercased()),
+              (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+            return false
+        }
+
+        return true
     }
 
     nonisolated private static var audioExtensions: Set<String> {
@@ -658,6 +823,12 @@ private actor ScanProgressReporter {
     private let totalAlbums: Int
     private let progress: LibraryScanProgressHandler
     private var completedAlbums = 0
+    private var lastReportedAt: ContinuousClock.Instant?
+    private let minimumInterval: Duration = .milliseconds(80)
+    private var pendingPhase: LibraryScanProgress.Phase?
+    private var pendingTargetPath: String?
+    private var pendingCompletedFilesInAlbum: Int?
+    private var pendingTotalFilesInAlbum: Int?
 
     init(
         totalAlbums: Int,
@@ -673,14 +844,34 @@ private actor ScanProgressReporter {
         completedFilesInAlbum: Int?,
         totalFilesInAlbum: Int?
     ) async {
+        pendingPhase = phase
+        pendingTargetPath = targetPath
+        pendingCompletedFilesInAlbum = completedFilesInAlbum
+        pendingTotalFilesInAlbum = totalFilesInAlbum
+
+        let now = ContinuousClock.now
+        if let last = lastReportedAt, now - last < minimumInterval {
+            return
+        }
+        lastReportedAt = now
+        await flushPending()
+    }
+
+    func flush() async {
+        await flushPending()
+    }
+
+    private func flushPending() async {
+        guard let phase = pendingPhase,
+              let targetPath = pendingTargetPath else { return }
         let snapshot = completedAlbums
         await progress(LibraryScanProgress(
             phase: phase,
             targetPath: targetPath,
             completedAlbums: snapshot,
             totalAlbums: totalAlbums,
-            completedFilesInAlbum: completedFilesInAlbum,
-            totalFilesInAlbum: totalFilesInAlbum
+            completedFilesInAlbum: pendingCompletedFilesInAlbum,
+            totalFilesInAlbum: pendingTotalFilesInAlbum
         ))
     }
 
@@ -695,17 +886,32 @@ private struct AlbumBoundary: Sendable {
     let artistName: String
     let albumName: String
     let issues: [AlbumScanIssue]
+    let audioFileURLs: [URL]?
 
     nonisolated init(
         folderURL: URL,
         artistName: String,
         albumName: String,
-        issues: [AlbumScanIssue] = []
+        issues: [AlbumScanIssue] = [],
+        audioFileURLs: [URL]? = nil
     ) {
         self.folderURL = folderURL
         self.artistName = artistName
         self.albumName = albumName
         self.issues = issues
+        self.audioFileURLs = audioFileURLs?.sorted {
+            $0.path.localizedStandardCompare($1.path) == .orderedAscending
+        }
+    }
+
+    nonisolated func appendingAudioFileURLs(_ newAudioFileURLs: [URL]) -> AlbumBoundary {
+        AlbumBoundary(
+            folderURL: folderURL,
+            artistName: artistName,
+            albumName: albumName,
+            issues: issues,
+            audioFileURLs: (audioFileURLs ?? []) + newAudioFileURLs
+        )
     }
 }
 
@@ -714,10 +920,31 @@ private struct DiscoveredBoundaries: Sendable {
     let looseAudioPaths: [String]
 }
 
+private struct ArtistDiscoveryResult: Sendable {
+    let artistURL: URL
+    let discovered: DiscoveredBoundaries
+}
+
+private struct DirectAudioDirectory: Sendable {
+    let url: URL
+    let audioFileURLs: [URL]
+}
+
 enum LibraryScanError: LocalizedError, Equatable {
     case noAlbumsFound
 
     var errorDescription: String? {
         "没有找到符合当前目录角色的专辑文件夹。"
+    }
+}
+
+private extension Optional {
+    nonisolated var isNil: Bool {
+        switch self {
+        case .none:
+            true
+        case .some:
+            false
+        }
     }
 }

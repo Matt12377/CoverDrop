@@ -2,7 +2,7 @@ import Foundation
 import ImageIO
 
 struct ImageIOCoverDetector: CoverDetecting {
-    func detectCover(in albumURL: URL) async throws -> CoverDetectionResult {
+    nonisolated func detectCover(in albumURL: URL) async throws -> CoverDetectionResult {
         try await Task.detached(priority: .utility) {
             try Self.detectSynchronously(in: albumURL)
         }.value
@@ -12,8 +12,8 @@ struct ImageIOCoverDetector: CoverDetecting {
         in albumURL: URL
     ) throws -> CoverDetectionResult {
         let files = try recursiveFiles(in: albumURL)
-        var validImages: [CoverCandidate] = []
-        var validNamedImages: [CoverCandidate] = []
+        var validImages: [ImageCandidate] = []
+        var validNamedImages: [ImageCandidate] = []
         var invalid: [String] = []
 
         for file in files {
@@ -21,13 +21,17 @@ struct ImageIOCoverDetector: CoverDetecting {
             guard priority != nil || hasSupportedImageExtension(file) else { continue }
             let relativePath = relativePath(of: file, under: albumURL)
 
-            if canReadImageMetadata(at: file) {
+            if let size = imageSize(at: file) {
                 let depth = max(0, relativePath.split(separator: "/").count - 1)
-                let candidate = CoverCandidate(
-                    url: file,
-                    relativePath: relativePath,
-                    namePriority: priority ?? 3,
-                    depth: depth
+                let candidate = ImageCandidate(
+                    cover: CoverCandidate(
+                        url: file,
+                        relativePath: relativePath,
+                        namePriority: priority ?? 3,
+                        depth: depth
+                    ),
+                    width: size.width,
+                    height: size.height
                 )
                 validImages.append(candidate)
                 if priority != nil {
@@ -40,9 +44,11 @@ struct ImageIOCoverDetector: CoverDetecting {
 
         let selected: CoverCandidate?
         if validImages.count == 1 {
-            selected = validImages[0]
+            selected = validImages[0].cover
+        } else if let namedCover = sortedByCoverPriority(validNamedImages).first {
+            selected = namedCover.cover
         } else {
-            selected = sortedByCoverPriority(validNamedImages).first
+            selected = sortedByHeuristicCoverPriority(validImages).first?.cover
         }
 
         return CoverDetectionResult(
@@ -87,17 +93,70 @@ struct ImageIOCoverDetector: CoverDetecting {
         ["jpg", "jpeg", "png", "webp", "heic", "heif", "tif", "tiff", "bmp", "gif", "avif"]
     }
 
-    nonisolated private static func sortedByCoverPriority(
-        _ candidates: [CoverCandidate]
-    ) -> [CoverCandidate] {
-        candidates.sorted {
-            if $0.depth != $1.depth { return $0.depth < $1.depth }
-            if $0.namePriority != $1.namePriority { return $0.namePriority < $1.namePriority }
-            return $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending
+    private struct ImageCandidate {
+        let cover: CoverCandidate
+        let width: Int
+        let height: Int
+
+        nonisolated var aspectDeviation: Double {
+            Double(abs(width - height)) / Double(max(width, height))
+        }
+
+        nonisolated var pixelArea: Int {
+            width * height
         }
     }
 
-    nonisolated private static func canReadImageMetadata(at url: URL) -> Bool {
+    nonisolated private static func sortedByCoverPriority(
+        _ candidates: [ImageCandidate]
+    ) -> [ImageCandidate] {
+        candidates.sorted {
+            if $0.cover.depth != $1.cover.depth { return $0.cover.depth < $1.cover.depth }
+            if $0.cover.namePriority != $1.cover.namePriority {
+                return $0.cover.namePriority < $1.cover.namePriority
+            }
+            return $0.cover.relativePath.localizedStandardCompare($1.cover.relativePath) == .orderedAscending
+        }
+    }
+
+    nonisolated private static func sortedByHeuristicCoverPriority(
+        _ candidates: [ImageCandidate]
+    ) -> [ImageCandidate] {
+        candidates.sorted {
+            if $0.cover.depth != $1.cover.depth { return $0.cover.depth < $1.cover.depth }
+            if $0.aspectDeviation != $1.aspectDeviation {
+                return $0.aspectDeviation < $1.aspectDeviation
+            }
+            let lhsNameScore = heuristicNameScore(for: $0.cover.url)
+            let rhsNameScore = heuristicNameScore(for: $1.cover.url)
+            if lhsNameScore != rhsNameScore { return lhsNameScore < rhsNameScore }
+            if $0.pixelArea != $1.pixelArea { return $0.pixelArea > $1.pixelArea }
+            return $0.cover.relativePath.localizedStandardCompare($1.cover.relativePath) == .orderedAscending
+        }
+    }
+
+    nonisolated private static func heuristicNameScore(for url: URL) -> Int {
+        let fileName = url.deletingPathExtension().lastPathComponent.lowercased()
+        let negativeKeywords = [
+            "back", "rear", "tray", "cd", "disc", "booklet", "inlay", "label", "lyrics", "logo",
+            "背面", "封底", "碟", "盘", "唱片", "歌词", "内页", "小册子", "标签"
+        ]
+        if negativeKeywords.contains(where: { fileName.contains($0) }) {
+            return 1
+        }
+
+        let positiveKeywords = [
+            "album", "artwork", "sleeve", "jacket", "scan",
+            "封面", "正面", "外盒", "扫描"
+        ]
+        if positiveKeywords.contains(where: { fileName.contains($0) }) {
+            return -1
+        }
+
+        return 0
+    }
+
+    nonisolated private static func imageSize(at url: URL) -> (width: Int, height: Int)? {
         let sourceOptions = [
             kCGImageSourceShouldCache: false
         ] as CFDictionary
@@ -106,9 +165,10 @@ struct ImageIOCoverDetector: CoverDetecting {
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, sourceOptions) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
               let height = properties[kCGImagePropertyPixelHeight] as? NSNumber else {
-            return false
+            return nil
         }
-        return width.intValue > 0 && height.intValue > 0
+        guard width.intValue > 0 && height.intValue > 0 else { return nil }
+        return (width.intValue, height.intValue)
     }
 
     nonisolated private static func selectedWithPreviewCache(

@@ -37,6 +37,36 @@ struct FileSystemLibraryScannerTests {
         }
     }
 
+    @Test("纯数字碟目录会归并到父专辑目录")
+    func mergesPlainNumberedDiscFoldersIntoAlbumBoundary() async throws {
+        try await withTemporaryDirectory { root in
+            try makeAudio(
+                "韩宝仪/1996-旧情绵绵 经典金系列2CD[荣机构经典金系列][WAV]/01/01.wav",
+                under: root
+            )
+            try makeAudio(
+                "韩宝仪/1996-旧情绵绵 经典金系列2CD[荣机构经典金系列][WAV]/02/01.wav",
+                under: root
+            )
+            let expectedFolder = root.appendingPathComponent(
+                "韩宝仪/1996-旧情绵绵 经典金系列2CD[荣机构经典金系列][WAV]",
+                isDirectory: true
+            )
+
+            let result = try await makeScanner().scan(
+                libraryURL: root.appendingPathComponent("韩宝仪", isDirectory: true),
+                role: .artist
+            )
+            let album = try #require(result.albums.first)
+
+            #expect(result.albums.count == 1)
+            #expect(album.artistName == "韩宝仪")
+            #expect(album.albumName == "1996-旧情绵绵 经典金系列2CD[荣机构经典金系列][WAV]")
+            #expect(isSameFileURL(album.folderURL, expectedFolder))
+            #expect(album.audioFiles.map(\.relativePath) == ["01/01.wav", "02/01.wav"])
+        }
+    }
+
     @Test("泛称专辑目录中的编号壳目录会下钻到真实专辑")
     func skipsGenericAlbumFolderAndNumberedShell() async throws {
         try await withTemporaryDirectory { root in
@@ -332,6 +362,32 @@ struct FileSystemLibraryScannerTests {
         }
     }
 
+    @Test("已有独立图片封面时跳过音频内嵌图读取")
+    func imageFileCoverSkipsEmbeddedArtworkMetadataRead() async throws {
+        try await withTemporaryDirectory { root in
+            try makeAudio("01.flac", under: root)
+            let imageFileURL = root.appendingPathComponent("cover.jpg")
+            let embeddedArtworkURL = root.appendingPathComponent("Embedded/embedded.jpg")
+            try writeValidPNG(to: imageFileURL)
+            let metadataReader = RecordingArtworkGateMetadataReader(
+                embeddedArtworkNames: ["01.flac": embeddedArtworkURL]
+            )
+            let scanner = FileSystemLibraryScanner(
+                metadataReader: metadataReader,
+                coverDetector: ImageIOCoverDetector(),
+                maxConcurrentAlbums: AppConfiguration.live.scan.maxConcurrentAlbums
+            )
+
+            let result = try await scanner.scan(libraryURL: root, role: .album)
+            let cover = try #require(result.albums[0].displayedCover)
+
+            #expect(isSameFileURL(cover.url, imageFileURL))
+            #expect(cover.source == .file)
+            #expect(metadataReader.includeEmbeddedArtworkRequests() == [false])
+            #expect(result.albums[0].audioFiles[0].metadata?.embeddedArtworkURL == nil)
+        }
+    }
+
     @Test("真实图片文件扫描结果会作为封面墙显示封面")
     func realImageFileBecomesDisplayedCover() async throws {
         try await withTemporaryDirectory { root in
@@ -357,6 +413,49 @@ struct FileSystemLibraryScannerTests {
         }
     }
 
+    @Test("重扫时 cover.jpg 的新增和删除会反映到封面状态")
+    func rescanningReflectsCoverFileChanges() async throws {
+        try await withTemporaryDirectory { root in
+            try makeAudio("01.flac", under: root)
+            let scanner = FileSystemLibraryScanner(
+                metadataReader: StubMetadataReader(),
+                coverDetector: ImageIOCoverDetector(),
+                maxConcurrentAlbums: AppConfiguration.live.scan.maxConcurrentAlbums
+            )
+            let coverURL = root.appendingPathComponent("cover.jpg")
+
+            let resultBeforeCover = try await scanner.scan(libraryURL: root, role: .album)
+            #expect(resultBeforeCover.albums[0].displayedCover == nil)
+
+            try writeValidPNG(to: coverURL)
+            let resultAfterCoverAdded = try await scanner.scan(libraryURL: root, role: .album)
+            #expect(resultAfterCoverAdded.albums[0].displayedCover?.relativePath == "cover.jpg")
+
+            try FileManager.default.removeItem(at: coverURL)
+            let resultAfterCoverDeleted = try await scanner.scan(libraryURL: root, role: .album)
+            #expect(resultAfterCoverDeleted.albums[0].displayedCover == nil)
+        }
+    }
+
+    @Test("重扫时新增多个 WAV 分轨会反映到曲目列表")
+    func rescanningReflectsAddedWAVTracks() async throws {
+        try await withTemporaryDirectory { root in
+            try makeAudio("01.wav", under: root)
+            let scanner = makeScanner()
+
+            let resultBeforeAddingTracks = try await scanner.scan(libraryURL: root, role: .album)
+            #expect(resultBeforeAddingTracks.albums[0].audioFiles.map(\.relativePath) == ["01.wav"])
+
+            try makeAudio("02.wav", under: root)
+            try makeAudio("03.wav", under: root)
+            let resultAfterAddingTracks = try await scanner.scan(libraryURL: root, role: .album)
+
+            #expect(resultAfterAddingTracks.albums[0].audioFiles.map(\.relativePath) == [
+                "01.wav", "02.wav", "03.wav"
+            ])
+        }
+    }
+
     @Test("歌手目录没有专辑子目录时给出明确错误")
     func artistWithoutAlbumIsRejected() async throws {
         try await withTemporaryDirectory { root in
@@ -365,6 +464,21 @@ struct FileSystemLibraryScannerTests {
             await #expect(throws: LibraryScanError.noAlbumsFound) {
                 try await makeScanner().scan(libraryURL: root, role: .artist)
             }
+        }
+    }
+
+    @Test("扩展名像音频的文件夹不会进入曲目列表")
+    func audioExtensionDirectoryIsNotScannedAsTrack() async throws {
+        try await withTemporaryDirectory { root in
+            try makeAudio("01.wav", under: root)
+            try FileManager.default.createDirectory(
+                at: root.appendingPathComponent("不是音频.flac", isDirectory: true),
+                withIntermediateDirectories: true
+            )
+
+            let result = try await makeScanner().scan(libraryURL: root, role: .album)
+
+            #expect(result.albums[0].audioFiles.map(\.relativePath) == ["01.wav"])
         }
     }
 
@@ -461,7 +575,10 @@ private struct StubMetadataReader: AudioMetadataReading {
         self.embeddedArtworkNames = embeddedArtworkNames
     }
 
-    func readMetadata(at url: URL) async throws -> AudioMetadata {
+    func readMetadata(
+        at url: URL,
+        includingEmbeddedArtwork: Bool
+    ) async throws -> AudioMetadata {
         if failingNames.contains(url.lastPathComponent) {
             throw StubMetadataError.unreadable
         }
@@ -477,8 +594,52 @@ private struct StubMetadataReader: AudioMetadataReading {
             discNumber: disc,
             trackNumber: track,
             durationSeconds: nil,
-            embeddedArtworkURL: embeddedArtworkNames[url.lastPathComponent]
+            embeddedArtworkURL: includingEmbeddedArtwork
+                ? embeddedArtworkNames[url.lastPathComponent]
+                : nil
         )
+    }
+}
+
+private final class RecordingArtworkGateMetadataReader: AudioMetadataReading, @unchecked Sendable {
+    private let embeddedArtworkNames: [String: URL]
+    private let lock = NSLock()
+    private var requests: [Bool] = []
+
+    init(embeddedArtworkNames: [String: URL]) {
+        self.embeddedArtworkNames = embeddedArtworkNames
+    }
+
+    func readMetadata(
+        at url: URL,
+        includingEmbeddedArtwork: Bool
+    ) async throws -> AudioMetadata {
+        recordRequest(includingEmbeddedArtwork)
+
+        return AudioMetadata(
+            title: nil,
+            artist: nil,
+            albumArtist: nil,
+            album: nil,
+            discNumber: nil,
+            trackNumber: nil,
+            durationSeconds: nil,
+            embeddedArtworkURL: includingEmbeddedArtwork
+                ? embeddedArtworkNames[url.lastPathComponent]
+                : nil
+        )
+    }
+
+    private func recordRequest(_ includingEmbeddedArtwork: Bool) {
+        lock.lock()
+        requests.append(includingEmbeddedArtwork)
+        lock.unlock()
+    }
+
+    func includeEmbeddedArtworkRequests() -> [Bool] {
+        lock.lock()
+        defer { lock.unlock() }
+        return requests
     }
 }
 
@@ -503,7 +664,10 @@ private struct StaticCoverDetector: CoverDetecting {
 private struct DelayedMetadataReader: AudioMetadataReading {
     let probe: ConcurrentReadProbe
 
-    func readMetadata(at url: URL) async throws -> AudioMetadata {
+    func readMetadata(
+        at url: URL,
+        includingEmbeddedArtwork: Bool
+    ) async throws -> AudioMetadata {
         await probe.enter()
         try? await Task.sleep(nanoseconds: 50_000_000)
         await probe.leave()

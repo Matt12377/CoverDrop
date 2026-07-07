@@ -1,0 +1,123 @@
+{
+  "project": {
+    "name": "CoverDrop UI 重设计",
+    "path": "/Users/yihe/Swift/CoverDrop/coverdrop-ui-redesign",
+    "operation": "create",
+    "deviceType": "desktop",
+    "language": "zh-CN",
+    "dashboardMode": false,
+    "designRead": "macOS desktop tool / music collector / refined Apple restraint / medium density / avoid heavy chrome",
+    "designDials": {
+      "layoutVariance": 2,
+      "motionIntensity": 2,
+      "visualDensity": 3
+    },
+    "styleDefinitionBrief": "Apple Music-inspired macOS native app with restrained palette, cover-first hierarchy, and calm confidence"
+  },
+  "designSource": {
+    "operatingMode": "library-bound",
+    "libraryIdentity": {
+      "name": "苹果",
+      "id": "dl_builtin_apple",
+      "version": null,
+      "scope": "built-in-global",
+      "path": "/Users/yihe/.trae-cn/design_libraries/dl_builtin_apple",
+      "versionSource": "metadata.json"
+    },
+    "libraryPath": "/Users/yihe/.trae-cn/design_libraries/dl_builtin_apple",
+    "cssFilePath": "/Users/yihe/.trae-cn/design_libraries/dl_builtin_apple/colors_and_type.css",
+    "brandPrefix": "brand",
+    "themeMode": "light",
+    "designDecisionSummary": "Apple-style restrained palette: brand-500 blue accent, background-200/50 surfaces, text-800 primary, 1.2rem radius, DM Sans typography",
+    "componentContractKind": "legacy-json",
+    "forbiddenInventedComponents": [],
+    "allowedComponents": ["button", "card", "input", "navigation", "product-grid"],
+    "styleConstraints": {
+      "radiusMax": 19,
+      "spacingBase": 4,
+      "fontSizeBody": 14,
+      "fontSizeMin": 10,
+      "controlHeightDefault": 32,
+      "controlHeightLarge": 38
+    },
+    "productContext": {
+      "kitType": "apple-hig-inspired",
+      "productType": "macOS desktop music management tool"
+    },
+    "actualTokenNameReference": [
+      { "semanticPurpose": "Primary background", "tokenName": "background-50" },
+      { "semanticPurpose": "Secondary background", "tokenName": "background-200" },
+      { "semanticPurpose": "Primary text", "tokenName": "text-800" },
+      { "semanticPurpose": "Secondary text", "tokenName": "text-500" },
+      { "semanticPurpose": "Brand accent", "tokenName": "brand-500" },
+      { "semanticPurpose": "Success state", "tokenName": "state-success" },
+      { "semanticPurpose": "Warning state", "tokenName": "state-warning" },
+      { "semanticPurpose": "Border", "tokenName": "background-400" }
+    ]
+  },
+  "pages": [
+    {
+      "nodeId": "page-cover-wall",
+      "slug": "cover-wall",
+      "title": "封面墙",
+      "htmlSrc": "pages/cover-wall.html",
+      "pageIndex": 1,
+      "pageType": "showcase",
+      "businessScenario": "Browse album covers after scanning a music library, filter by cover status, open album detail",
+      "visualNorthStar": "Apple Music grid: covers float on clean surface with generous whitespace, subtle hover lift, status indicated by minimal color dots",
+      "compositionPattern": "Product Grid with integrated filter bar",
+      "continuityAnchors": ["sidebar navigation", "cover-card radius-14", "status dot indicators", "search-bar-inline"],
+      "componentPlan": ["card", "input", "navigation"],
+      "imagePlan": [],
+      "chartsRequired": false
+    },
+    {
+      "nodeId": "page-album-detail",
+      "slug": "album-detail",
+      "title": "专辑详情",
+      "htmlSrc": "pages/album-detail.html",
+      "pageIndex": 2,
+      "pageType": "information-dense",
+      "businessScenario": "View album metadata, tracks, cover status; save dragged cover image",
+      "visualNorthStar": "Clean two-column sheet: cover left, info right, with grouped metadata cards and subtle track list",
+      "compositionPattern": "Info-action dual-column",
+      "continuityAnchors": ["cover-card radius-14", "grouped metadata", "track-table-clean", "bottom-action-bar"],
+      "componentPlan": ["card", "button", "input"],
+      "imagePlan": [],
+      "chartsRequired": false
+    },
+    {
+      "nodeId": "page-cover-search",
+      "slug": "cover-search",
+      "title": "搜索封面",
+      "htmlSrc": "pages/cover-search.html",
+      "pageIndex": 3,
+      "pageType": "task-driven",
+      "businessScenario": "Search cover images via embedded web view, drag image to preview, save or return",
+      "visualNorthStar": "Split panel: browser left, compact info panel right with drop target, clean source picker",
+      "compositionPattern": "Split-panel task layout",
+      "continuityAnchors": ["side-panel-compact", "drop-target-dashed", "source-segmented-picker", "cover-preview-radius-10"],
+      "componentPlan": ["card", "button", "input"],
+      "imagePlan": [],
+      "chartsRequired": false
+    },
+    {
+      "nodeId": "page-sidebar-home",
+      "slug": "sidebar-home",
+      "title": "侧边栏与首页",
+      "htmlSrc": "pages/sidebar-home.html",
+      "pageIndex": 4,
+      "pageType": "showcase",
+      "businessScenario": "Sidebar with music library list and add button; main area shows library detail or empty state",
+      "visualNorthStar": "Finder-like sidebar with album thumbnails, clean library detail page with centered scan CTA",
+      "compositionPattern": "NavigationSplitView",
+      "continuityAnchors": ["sidebar-selected-highlight", "add-library-button", "empty-state-centered", "scan-CTA-primary"],
+      "componentPlan": ["navigation", "button", "card"],
+      "imagePlan": [],
+      "chartsRequired": false
+    }
+  ],
+  "assets": [],
+  "wiringPlan": [],
+  "hiddenInteractionPlan": []
+}

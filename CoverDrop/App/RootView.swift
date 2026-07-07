@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct RootView: View {
-    let appModel: AppModel
+    @ObservedObject var appModel: AppModel
 
     var body: some View {
         switch appModel.route {
@@ -11,6 +11,8 @@ struct RootView: View {
     }
 }
 
-#Preview {
-    RootView(appModel: AppModel())
+struct RootView_Previews: PreviewProvider {
+    static var previews: some View {
+        RootView(appModel: AppModel())
+    }
 }

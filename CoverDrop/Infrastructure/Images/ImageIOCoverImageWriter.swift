@@ -17,11 +17,11 @@ struct ImageIOCoverImageWriter: CoverImageWriting {
         }
     }
 
-    func writeCoverImage(
+    nonisolated func writeCoverImage(
         from sourceURL: URL,
         toAlbumFolder albumFolderURL: URL
     ) async throws -> URL {
-        try await Task.detached(priority: .userInitiated) {
+        return try await Task.detached(priority: .userInitiated) {
             try Self.writeCoverImageSynchronously(
                 from: sourceURL,
                 toAlbumFolder: albumFolderURL

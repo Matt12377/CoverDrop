@@ -5,11 +5,16 @@ import ImageIO
 import UniformTypeIdentifiers
 
 struct TagLibMetadataReader: AudioMetadataReading {
-    func readMetadata(at url: URL) async throws -> AudioMetadata {
+    nonisolated func readMetadata(
+        at url: URL,
+        includingEmbeddedArtwork: Bool
+    ) async throws -> AudioMetadata {
         let metadata = try await Task.detached(priority: .utility) {
             try Self.readSynchronously(at: url)
         }.value
-        let embeddedArtworkURL = await Self.embeddedArtworkURL(from: url)
+        let embeddedArtworkURL = includingEmbeddedArtwork
+            ? await Self.embeddedArtworkURL(from: url)
+            : nil
 
         return AudioMetadata(
             title: metadata.title,

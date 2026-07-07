@@ -1,0 +1,1412 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CoverDrop - 封面墙</title>
+    <style id="theme-vars">
+/*
+ * Pinguo design tokens
+ * Brand: Pinguo
+ * Domain: Consumer imaging product
+ * Style: Restrained, elegant, Apple-inspired
+ * Theme mode: light-dark
+ * Source language: zh
+ * Output language: en
+ *
+ * Color architecture (two layers):
+ *   1. Primitive palette - six categories. brand / background / text / icon
+ *      are each a 10-step scale (50 lightest to 900 darkest). state-success and
+ *      state-error are functional colors anchored on Apple system colors.
+ *      Anchors follow Apple Human Interface Guidelines system colors
+ *      (System Blue #007AFF, System Green #34C759, System Red #FF3B30,
+ *      system grays / label / background colors).
+ *   2. Semantic tokens - :root (light) and .dark map roles onto primitives.
+ *      Components and UI kits must only consume the semantic tokens below.
+ */
+
+/* @group-priority: brand, background, text, icon, state-success, state-error */
+
+:root {
+  /* ===== PRIMITIVE PALETTE ===== */
+
+  /* brand */
+  --brand-50: #e8f2ff;
+  --brand-100: #cfe5ff;
+  --brand-200: #9fcbff;
+  --brand-300: #66abff;
+  --brand-400: #2e8dff;
+  --brand-500: #007aff; /* @primary */
+  --brand-600: #0064d6;
+  --brand-700: #004fad;
+  --brand-800: #003b82;
+  --brand-900: #00275a;
+
+  /* background */
+  --background-50: #ffffff;
+  --background-100: #f7f7fa;
+  --background-200: #f2f2f7;
+  --background-300: #e5e5ea;
+  --background-400: #d1d1d6;
+  --background-500: #aeaeb2;
+  --background-600: #8e8e93;
+  --background-700: #3a3a3c;
+  --background-800: #1c1c1e;
+  --background-900: #000000;
+
+  /* text */
+  --text-50: #f5f5f7;
+  --text-100: #e3e3e8;
+  --text-200: #c7c7cc;
+  --text-300: #aeaeb2;
+  --text-400: #8e8e93;
+  --text-500: #6e6e73;
+  --text-600: #48484a;
+  --text-700: #3c3c43;
+  --text-800: #1d1d1f;
+  --text-900: #000000;
+
+  /* icon */
+  --icon-50: #f5f5f7;
+  --icon-100: #e5e5ea;
+  --icon-200: #d1d1d6;
+  --icon-300: #c7c7cc;
+  --icon-400: #aeaeb2;
+  --icon-500: #8e8e93;
+  --icon-600: #6e6e73;
+  --icon-700: #48484a;
+  --icon-800: #2c2c2e;
+  --icon-900: #1d1d1f;
+
+  /* state-success */
+  --state-success: #34c759; /* @primary */
+  --state-success-dark: #30d158;
+  --state-success-surface: #e9f9ee;
+  --state-success-foreground: #ffffff;
+
+  /* state-error */
+  --state-error: #ff3b30; /* @primary */
+  --state-error-dark: #ff453a;
+  --state-error-surface: #ffecea;
+  --state-error-foreground: #ffffff;
+
+  /* ===== SEMANTIC ROLES ===== */
+
+  /* semantic */
+  --background: var(--background-50);
+  --foreground: var(--text-800);
+  --card: var(--background-50);
+  --card-foreground: var(--text-800);
+  --popover: var(--background-50);
+  --popover-foreground: var(--text-900);
+
+  --primary: var(--brand-500);
+  --primary-foreground: var(--background-50);
+  --secondary: var(--background-200);
+  --secondary-foreground: var(--text-800);
+  --muted: var(--background-200);
+  --muted-foreground: var(--text-400);
+  --accent: var(--background-100);
+  --accent-foreground: var(--text-800);
+  --destructive: var(--state-error);
+  --destructive-foreground: var(--state-error-foreground);
+  --success: var(--state-success);
+  --success-foreground: var(--state-success-foreground);
+  --border: var(--background-300);
+  --input: var(--background-400);
+  --ring: var(--brand-500);
+
+  --icon: var(--icon-900);
+  --icon-muted: var(--icon-500);
+
+  /* chart */
+  --chart-1: var(--state-success);
+  --chart-2: var(--brand-500);
+  --chart-3: #ff9500;
+  --chart-4: #5856d6;
+  --chart-5: #af52de;
+
+  /* sidebar */
+  --sidebar: var(--background-200);
+  --sidebar-foreground: var(--text-800);
+  --sidebar-primary: var(--brand-500);
+  --sidebar-primary-foreground: var(--background-50);
+  --sidebar-accent: var(--background-300);
+  --sidebar-accent-foreground: var(--text-800);
+  --sidebar-border: var(--background-300);
+  --sidebar-ring: var(--brand-500);
+
+  /* TYPOGRAPHY */
+  --font-sans: DM Sans, ui-sans-serif, sans-serif, system-ui;
+  --font-serif: DM Sans, ui-sans-serif, sans-serif, system-ui;
+  --font-mono: JetBrains Mono, monospace;
+  --tracking-normal: 0em;
+
+  /* RADIUS */
+  --radius: 1.2rem;
+
+  /* SHADOWS */
+  --shadow-2xs: 0 1px 2px -1px rgba(0, 0, 0, 0.04); /* Hairline */
+  --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.04); /* Subtle */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05), 0 1px 3px -1px rgba(0, 0, 0, 0.05); /* Card */
+  --shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.06), 0 1px 2px -1px rgba(0, 0, 0, 0.05); /* Raised */
+  --shadow-md: 0 4px 8px -2px rgba(0, 0, 0, 0.06), 0 2px 4px -2px rgba(0, 0, 0, 0.05); /* Card Hover */
+  --shadow-lg: 0 8px 24px -8px rgba(0, 0, 0, 0.08), 0 4px 8px -4px rgba(0, 0, 0, 0.05); /* Float */
+  --shadow-xl: 0 16px 40px -10px rgba(0, 0, 0, 0.10), 0 8px 16px -8px rgba(0, 0, 0, 0.06); /* Overlay */
+  --shadow-2xl: 0 24px 64px -12px rgba(0, 0, 0, 0.12); /* Modal */
+
+  /* SPACING */
+  --spacing: 0.24rem;
+}
+
+/* ===== SEMANTIC ROLES - dark (primitive palette inherited) ===== */
+.dark {
+  --background: var(--background-900);
+  --foreground: var(--text-50);
+  --card: var(--background-800);
+  --card-foreground: var(--text-50);
+  --popover: var(--background-700);
+  --popover-foreground: var(--text-50);
+
+  --primary: var(--brand-400);
+  --primary-foreground: var(--background-900);
+  --secondary: var(--background-800);
+  --secondary-foreground: var(--text-50);
+  --muted: var(--background-800);
+  --muted-foreground: var(--text-400);
+  --accent: var(--background-700);
+  --accent-foreground: var(--text-50);
+  --destructive: var(--state-error-dark);
+  --destructive-foreground: var(--state-error-foreground);
+  --success: var(--state-success-dark);
+  --success-foreground: var(--state-success-foreground);
+  --border: var(--background-700);
+  --input: var(--background-700);
+  --ring: var(--brand-400);
+
+  --icon: var(--icon-50);
+  --icon-muted: var(--icon-500);
+
+  --chart-1: var(--state-success-dark);
+  --chart-2: var(--brand-400);
+  --chart-3: #ff9f0a;
+  --chart-4: #5e5ce6;
+  --chart-5: #bf5af2;
+
+  --sidebar: var(--background-800);
+  --sidebar-foreground: var(--text-50);
+  --sidebar-primary: var(--brand-400);
+  --sidebar-primary-foreground: var(--background-900);
+  --sidebar-accent: var(--background-700);
+  --sidebar-accent-foreground: var(--text-50);
+  --sidebar-border: var(--background-700);
+  --sidebar-ring: var(--brand-400);
+
+  --shadow-2xs: 0 1px 2px -1px rgba(0, 0, 0, 0.30);
+  --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.30);
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.36), 0 1px 3px -1px rgba(0, 0, 0, 0.36);
+  --shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.40), 0 1px 2px -1px rgba(0, 0, 0, 0.36);
+  --shadow-md: 0 4px 8px -2px rgba(0, 0, 0, 0.44), 0 2px 4px -2px rgba(0, 0, 0, 0.36);
+  --shadow-lg: 0 8px 24px -8px rgba(0, 0, 0, 0.50), 0 4px 8px -4px rgba(0, 0, 0, 0.40);
+  --shadow-xl: 0 16px 40px -10px rgba(0, 0, 0, 0.55), 0 8px 16px -8px rgba(0, 0, 0, 0.44);
+  --shadow-2xl: 0 24px 64px -12px rgba(0, 0, 0, 0.60);
+}
+
+    </style>
+    <style id="component-vars">
+/*
+ * components.css - aggregated component CSS
+ * Auto-extracted from preview/component-*.html files.
+ * DO NOT EDIT. Regenerate with extract-components-css.mjs.
+ *
+ * Foundation tokens live in colors_and_type.css.
+ * This file consumes those tokens via var(--*) references.
+ */
+
+/* ============================================================
+ * Button
+ * source: preview/component-button.html
+ * rules: 10
+ */
+/* @anatomy
+   <div class="row"><span class="label">Primary 56</span><button class="btn btn-primary btn-lg">Buy now</button><button class="btn btn-primary btn-lg" disabled>Buy now</button></div>
+*/
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:calc(var(--spacing)*1.5);height:40px;padding:0 20px;border:none;border-radius:calc(var(--radius)*2);background:transparent;color:var(--foreground);font:600 14px/1 var(--font-sans);letter-spacing:var(--tracking-normal);white-space:nowrap;box-shadow:var(--shadow-sm);cursor:pointer;transition:background-color .18s ease,color .18s ease,opacity .18s ease,filter .18s ease}
+.btn:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.btn:disabled{opacity:.42;cursor:not-allowed}
+.btn-primary{background:var(--primary);color:var(--primary-foreground)}
+.btn-primary:hover{filter:brightness(.96)}
+.btn-secondary{height:48px;padding:0 24px;background:var(--secondary);color:var(--secondary-foreground)}
+.btn-secondary:hover{background:var(--muted)}
+.btn-text{height:48px;padding:0 4px;box-shadow:none}
+.btn-text:hover{color:var(--primary)}
+.btn-lg{height:56px;padding:0 28px;font-size:16px}
+
+/* ============================================================
+ * Card
+ * source: preview/component-card.html
+ * rules: 12
+ */
+/* @anatomy
+   <div class="row">
+   <span class="label">Info</span>
+   <article class="card">
+   <div><div class="eyebrow">Pinguo Apple</div>
+*/
+.card{width:188px;min-height:148px;padding:calc(var(--spacing)*5);display:flex;flex-direction:column;justify-content:space-between;background:var(--card);color:var(--card-foreground);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-md);transition:transform .18s ease,box-shadow .18s ease}
+.card:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg)}
+.card.disabled,.card.disabled:hover{opacity:.5;transform:none;box-shadow:var(--shadow-md)}
+.eyebrow,.meta{color:var(--muted-foreground);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+.title{margin:6px 0 8px;font-size:18px;line-height:1.15}
+.body-copy{margin:0;color:var(--muted-foreground);font-size:13px}
+.cta{display:inline-flex;align-items:center;justify-content:center;width:max-content;margin-top:12px;padding:calc(var(--spacing)*2) calc(var(--spacing)*3.5);border-radius:999px;background:var(--primary);color:var(--primary-foreground);font-size:12px;font-weight:700;text-decoration:none}
+.media{aspect-ratio:4/3;border-radius:calc(var(--radius) - 4px);background:linear-gradient(135deg,var(--secondary),var(--accent));border:1px solid var(--border)}
+.media-card{min-height:212px;padding:calc(var(--spacing)*4)}
+.media-card .title{font-size:16px;margin:10px 0 6px}
+.price{font-size:12px;color:var(--muted-foreground)}
+.dark{background:var(--card);color:var(--card-foreground)}
+
+/* ============================================================
+ * Comparison Table
+ * source: preview/component-comparison-table.html
+ * rules: 13
+ */
+/* @anatomy
+   <div class="row"><span class="label">Default</span><div class="t"><div class="c m">Compare models</div>
+*/
+.t{display:grid;grid-template-columns:96px repeat(3,1fr);overflow:hidden;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--card-foreground);box-shadow:var(--shadow-sm)}
+.q{grid-template-columns:82px repeat(4,1fr)}
+.c{padding:10px;border-right:1px solid var(--border);border-bottom:1px solid var(--border)}
+.t>.c:nth-child(4n),.q>.c:nth-child(5n){border-right:0}
+.t>.c:nth-last-child(-n+4),.q>.c:nth-last-child(-n+5){border-bottom:0}
+.m{background:var(--background);color:var(--muted-foreground);font:700 10px/1 var(--font-mono);letter-spacing:.12em;text-transform:uppercase}
+.h{background:var(--background);font-weight:700}
+.k{display:block;font-size:14px;line-height:1.1}
+.s{display:block;margin-top:4px;color:var(--chart-2);font-size:11px;font-weight:700}
+.b .k{color:var(--chart-2)}
+.v{font-weight:600}
+.n{color:var(--muted-foreground);font-size:12px}
+.x{opacity:.45}
+
+/* ============================================================
+ * Input
+ * source: preview/component-input.html
+ * rules: 10
+ */
+/* @anatomy
+   <div class="row">
+   <span class="label">Search 44</span>
+   <div class="field">
+   <span class="icon">⌕</span>
+   <input class="control" aria-label="Search products" placeholder="Search products">
+   <button class="clear" type="button" aria-label="Clear search">×</button>
+   </div>
+*/
+.surface{display:flex;gap:calc(var(--spacing)*2);padding:calc(var(--spacing)*3);border:1px solid var(--border);border-radius:var(--radius);background:var(--card);box-shadow:var(--shadow-sm)}
+.dark{background:var(--background);color:var(--foreground)}
+.field{display:flex;align-items:center;gap:calc(var(--spacing)*2);min-width:240px;height:44px;padding:0 calc(var(--spacing)*3);border:1px solid var(--input);border-radius:var(--radius);background:var(--background);color:var(--foreground);box-shadow:var(--shadow-xs)}
+.field.small{height:40px}
+.field:focus-within{border-color:var(--ring);box-shadow:0 0 0 1px var(--ring)}
+.field.disabled{opacity:.55}
+.icon,.clear{padding:0;border:0;background:transparent;color:var(--icon-muted);font:inherit}
+.icon{font-size:13px}
+.control{flex:1;border:0;outline:0;background:transparent;color:inherit;font:inherit}
+.control::placeholder{color:var(--muted-foreground)}
+
+/* ============================================================
+ * Navigation
+ * source: preview/component-navigation.html
+ * rules: 16
+ */
+/* @anatomy
+   <div class="row"><span class="label">Global 44</span><nav class="webbar dark" aria-label="Pinguo Apple global navigation"><span class="brand">Pinguo Apple</span><div class="rail"><a class="link" href="#">Store</a><a class="link" href="#">Explore</a><a class="link" href="#">Community</a><a class="link" href="#">Support</a></div>
+*/
+.webbar,.mobile{border:1px solid var(--border);box-shadow:var(--shadow-sm)}
+.webbar{display:flex;align-items:center;gap:calc(var(--spacing)*2);min-width:320px;height:44px;padding:0 calc(var(--spacing)*3);border-radius:var(--radius);background:var(--sidebar)}
+.brand{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
+.link,.tab{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;color:inherit;text-decoration:none;white-space:nowrap;transition:background-color .18s ease,color .18s ease,opacity .18s ease}
+.link{height:32px;padding:0 calc(var(--spacing)*2.5)}
+.link:hover,.tab:hover{background:var(--secondary)}
+.link:focus-visible,.tab:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.dark{background:var(--sidebar);color:var(--foreground)}
+.disabled{opacity:.48}
+.disabled .link,.disabled .tab{pointer-events:none}
+.mobile{padding:calc(var(--spacing)*2);border-radius:calc(var(--radius)*1.1);background:var(--card)}
+.screen{display:flex;align-items:flex-end;justify-content:center;width:188px;height:164px;padding:calc(var(--spacing)*3);border-radius:calc(var(--radius)*.9);background:linear-gradient(180deg,var(--background),var(--secondary))}
+.tabbar{display:flex;gap:calc(var(--spacing)*1.5);padding:calc(var(--spacing)*1.5);border:1px solid var(--border);border-radius:999px;background:var(--card);box-shadow:var(--shadow-md)}
+.tab{flex-direction:column;gap:2px;min-width:56px;height:56px;padding:0 calc(var(--spacing)*1.5);font-size:11px;text-align:center}
+.dot{width:18px;height:18px;border-radius:999px;background:var(--secondary);box-shadow:inset 0 0 0 1px var(--border)}
+.tab:hover .dot{background:var(--primary)}
+
+/* ============================================================
+ * Product Grid
+ * source: preview/component-product-grid.html
+ * rules: 12
+ */
+/* @anatomy
+   <div class="row">
+   <span class="label">4-up</span>
+   <div class="grid grid-4">
+   <article class="card"><div class="media"></div>
+*/
+.grid{display:grid;gap:8px;flex:1}
+.grid-4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.grid-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.card{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--card-foreground);box-shadow:var(--shadow-xs);transition:border-color .2s ease,transform .2s ease}
+.card:hover{border-color:var(--primary);transform:translateY(-1px)}
+.media{aspect-ratio:1;border-radius:calc(var(--radius) - 4px);background:linear-gradient(135deg,var(--secondary),var(--background));border:1px solid var(--border)}
+.eyebrow{color:var(--muted-foreground);font-size:10px;letter-spacing:.08em;text-transform:uppercase}
+.title{font-size:15px;line-height:1.25}
+.price{font-variant-numeric:tabular-nums}
+.cta{display:inline-flex;align-self:flex-start;padding:7px 10px;border-radius:999px;background:var(--primary);color:var(--primary-foreground);font-size:12px;text-decoration:none}
+.muted{color:var(--muted-foreground)}
+.is-disabled{opacity:.55}
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-foreground: var(--card-foreground);
+  }
+  @layer base {
+    body { background: var(--card-background); color: var(--card-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+    <div class="app-shell">
+
+      <!-- ═══ Sidebar ═══ -->
+      <nav class="sidebar">
+        <div class="sidebar-brand">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/></svg>
+          CoverDrop
+        </div>
+
+        <div class="sidebar-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          音乐库
+        </div>
+
+        <div class="sidebar-section-title">我的音乐库</div>
+
+        <div class="sidebar-item active">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h16Z"/></svg>
+          音乐收藏
+          <span class="item-count">112</span>
+        </div>
+
+        <div class="sidebar-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h16Z"/></svg>
+          独立音乐
+          <span class="item-count">34</span>
+        </div>
+
+        <div class="sidebar-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h16Z"/></svg>
+          古典音乐
+          <span class="item-count">56</span>
+        </div>
+
+        <div class="sidebar-spacer"></div>
+
+        <div class="sidebar-bottom">
+          <div class="sidebar-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
+            设置
+          </div>
+        </div>
+      </nav>
+
+      <!-- ═══ Main Content ═══ -->
+      <div class="main-content">
+
+        <!-- Top Bar -->
+        <div class="top-bar">
+          <div class="top-bar-left">
+            <button class="top-bar-back" aria-label="返回">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+            </button>
+            <span class="top-bar-title">音乐收藏</span>
+          </div>
+          <div class="top-bar-right">
+            <button class="btn-secondary">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+              返回音乐库
+            </button>
+          </div>
+        </div>
+
+        <!-- Stats Row -->
+        <div class="stats-row">
+          <div class="stat-item">
+            <span class="stat-number primary">112</span>
+            <span>专辑</span>
+          </div>
+          <div class="stat-separator"></div>
+          <div class="stat-item">
+            <span class="stat-number success">78</span>
+            <span>已有封面</span>
+          </div>
+          <div class="stat-separator"></div>
+          <div class="stat-item">
+            <span class="stat-number destructive">34</span>
+            <span>缺封面</span>
+          </div>
+          <div class="stat-separator"></div>
+          <div class="stat-item">
+            <span class="stat-number warning">91</span>
+            <span>需确认</span>
+          </div>
+          <div class="stat-separator"></div>
+          <div class="stat-item">
+            <span class="stat-number primary">0</span>
+            <span>散落音频</span>
+          </div>
+        </div>
+
+        <!-- Filter + Search Row -->
+        <div class="filter-row">
+          <div class="segmented-picker">
+            <button class="segment-btn active">全部</button>
+            <button class="segment-btn">缺封面</button>
+            <button class="segment-btn">需确认</button>
+            <button class="segment-btn">已有封面</button>
+            <button class="segment-btn">散落音频</button>
+          </div>
+          <div class="search-field">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" placeholder="按歌手、专辑、路径或标签名筛选">
+          </div>
+        </div>
+
+        <!-- Album Grid -->
+        <div class="grid-scroll">
+          <div class="album-grid">
+
+            <!-- Card 1: Normal with cover + success badge -->
+            <div class="album-card">
+              <div class="cover-container">
+                <div class="cover-art cover-gradient-1">
+                  <div class="cover-art-inner">
+                    <div class="inner-circle"></div>
+                    <div class="inner-lines">
+                      <div class="inner-line" style="width:60%"></div>
+                      <div class="inner-line" style="width:80%"></div>
+                      <div class="inner-line" style="width:40%"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="cover-badges">
+                  <span class="badge-pill badge-success">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    图片文件
+                  </span>
+                </div>
+              </div>
+              <div class="card-info">
+                <div class="card-album-name">Late Night Tales</div>
+                <div class="card-artist-name">Bonobo</div>
+                <div class="card-path">Bonobo/Late Night Tales</div>
+              </div>
+            </div>
+
+            <!-- Card 2: Missing cover -->
+            <div class="album-card">
+              <div class="cover-container">
+                <div class="cover-missing">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                  <span class="cover-missing-label">缺封面</span>
+                </div>
+                <div class="cover-badges">
+                  <span class="badge-pill badge-destructive">缺封面</span>
+                </div>
+              </div>
+              <div class="card-info">
+                <div class="card-album-name">Wish You Were Here</div>
+                <div class="card-artist-name">Pink Floyd</div>
+                <div class="card-path">Pink Floyd/Wish You Were Here</div>
+              </div>
+            </div>
+
+            <!-- Card 3: With cover + WAV tag -->
+            <div class="album-card">
+              <div class="cover-container">
+                <div class="cover-art cover-gradient-2">
+                  <div class="cover-art-inner">
+                    <div class="inner-text">AURORA</div>
+                    <div class="inner-lines">
+                      <div class="inner-line" style="width:50%"></div>
+                      <div class="inner-line" style="width:70%"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="cover-badges">
+                  <span class="badge-pill badge-success">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    图片文件
+                  </span>
+                  <span class="format-tag">[WAV]</span>
+                </div>
+              </div>
+              <div class="card-info">
+                <div class="card-album-name">AURORA</div>
+                <div class="card-artist-name">爆燃龍</div>
+                <div class="card-path">爆燃龍/AURORA</div>
+              </div>
+            </div>
+
+            <!-- Card 4: Warning - needs confirmation -->
+            <div class="album-card">
+              <div class="cover-container">
+                <div class="cover-art cover-gradient-3">
+                  <div class="cover-art-inner">
+                    <div class="inner-circle"></div>
+                    <div class="inner-text">MIDNIGHT</div>
+                  </div>
+                </div>
+                <div class="cover-badges">
+                  <span class="badge-pill badge-warning">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                    需确认
+                  </span>
+                </div>
+                <div class="cover-warning-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                </div>
+              </div>
+              <div class="card-info">
+                <div class="card-album-name">Midnight Prayers</div>
+                <div class="card-artist-name">The xx</div>
+                <div class="card-path">The xx/日本版/Midnight Prayers</div>
+              </div>
+            </div>
+
+            <!-- Card 5: Normal cover -->
+            <div class="album-card">
+              <div class="cover-container">
+                <div class="cover-art cover-gradient-4">
+                  <div class="cover-art-inner">
+                    <div class="inner-circle"></div>
+                    <div class="inner-lines">
+                      <div class="inner-line" style="width:70%"></div>
+                      <div class="inner-line" style="width:50%"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="cover-badges">
+                  <span class="badge-pill badge-success">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    图片文件
+                  </span>
+                </div>
+              </div>
+              <div class="card-info">
+                <div class="card-album-name">Currents</div>
+                <div class="card-artist-name">Tame Impala</div>
+                <div class="card-path">Tame Impala/Currents</div>
+              </div>
+            </div>
+
+            <!-- Card 6: Missing cover -->
+            <div class="album-card">
+              <div class="cover-container">
+                <div class="cover-missing">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                  <span class="cover-missing-label">缺封面</span>
+                </div>
+                <div class="cover-badges">
+                  <span class="badge-pill badge-destructive">缺封面</span>
+                </div>
+              </div>
+              <div class="card-info">
+                <div class="card-album-name">Is This It</div>
+                <div class="card-artist-name">The Strokes</div>
+                <div class="card-path">The Strokes/Is This It</div>
+              </div>
+            </div>
+
+            <!-- Card 7: DSD format -->
+            <div class="album-card">
+              <div class="cover-container">
+                <div class="cover-art cover-gradient-5">
+                  <div class="cover-art-inner">
+                    <div class="inner-text">VOYAGE</div>
+                    <div class="inner-lines">
+                      <div class="inner-line" style="width:60%"></div>
+                      <div class="inner-line" style="width:80%"></div>
+                      <div class="inner-line" style="width:45%"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="cover-badges">
+                  <span class="badge-pill badge-success">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    图片文件
+                  </span>
+                  <span class="format-tag">[DSD]</span>
+                </div>
+              </div>
+              <div class="card-info">
+                <div class="card-album-name">Voyage</div>
+                <div class="card-artist-name">ABBA</div>
+                <div class="card-path">ABBA/Voyage/DSD</div>
+              </div>
+            </div>
+
+            <!-- Card 8: Needs confirmation -->
+            <div class="album-card">
+              <div class="cover-container">
+                <div class="cover-art cover-gradient-6">
+                  <div class="cover-art-inner">
+                    <div class="inner-circle"></div>
+                    <div class="inner-text">R</div>
+                  </div>
+                </div>
+                <div class="cover-badges">
+                  <span class="badge-pill badge-warning">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                    需确认
+                  </span>
+                </div>
+              </div>
+              <div class="card-info">
+                <div class="card-album-name">Red</div>
+                <div class="card-artist-name">Taylor Swift</div>
+                <div class="card-path">Taylor Swift/港版/Red</div>
+              </div>
+            </div>
+
+            <!-- Card 9: Normal cover, FLAC -->
+            <div class="album-card">
+              <div class="cover-container">
+                <div class="cover-art cover-gradient-7">
+                  <div class="cover-art-inner">
+                    <div class="inner-circle"></div>
+                    <div class="inner-lines">
+                      <div class="inner-line" style="width:55%"></div>
+                      <div class="inner-line" style="width:75%"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="cover-badges">
+                  <span class="badge-pill badge-success">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    图片文件
+                  </span>
+                </div>
+              </div>
+              <div class="card-info">
+                <div class="card-album-name">Random Access Memories</div>
+                <div class="card-artist-name">Daft Punk</div>
+                <div class="card-path">Daft Punk/Random Access Memories</div>
+              </div>
+            </div>
+
+            <!-- Card 10: Missing cover -->
+            <div class="album-card">
+              <div class="cover-container">
+                <div class="cover-missing">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                  <span class="cover-missing-label">缺封面</span>
+                </div>
+                <div class="cover-badges">
+                  <span class="badge-pill badge-destructive">缺封面</span>
+                </div>
+              </div>
+              <div class="card-info">
+                <div class="card-album-name">Nevermind</div>
+                <div class="card-artist-name">Nirvana</div>
+                <div class="card-path">Nirvana/Nevermind</div>
+              </div>
+            </div>
+
+            <!-- Card 11: Normal + warning -->
+            <div class="album-card">
+              <div class="cover-container">
+                <div class="cover-art cover-gradient-8">
+                  <div class="cover-art-inner">
+                    <div class="inner-text">GOLD</div>
+                    <div class="inner-lines">
+                      <div class="inner-line" style="width:65%"></div>
+                      <div class="inner-line" style="width:45%"></div>
+                      <div class="inner-line" style="width:55%"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="cover-badges">
+                  <span class="badge-pill badge-warning">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                    需确认
+                  </span>
+                </div>
+                <div class="cover-warning-icon">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                </div>
+              </div>
+              <div class="card-info">
+                <div class="card-album-name">Gold Experience</div>
+                <div class="card-artist-name">Prince</div>
+                <div class="card-path">Prince/日本版/Gold Experience</div>
+              </div>
+            </div>
+
+            <!-- Card 12: WAV + cover -->
+            <div class="album-card">
+              <div class="cover-container">
+                <div class="cover-art cover-gradient-9">
+                  <div class="cover-art-inner">
+                    <div class="inner-circle"></div>
+                    <div class="inner-lines">
+                      <div class="inner-line" style="width:70%"></div>
+                      <div class="inner-line" style="width:50%"></div>
+                      <div class="inner-line" style="width:60%"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="cover-badges">
+                  <span class="badge-pill badge-success">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    图片文件
+                  </span>
+                  <span class="format-tag">[WAV]</span>
+                </div>
+              </div>
+              <div class="card-info">
+                <div class="card-album-name">OK Computer</div>
+                <div class="card-artist-name">Radiohead</div>
+                <div class="card-path">Radiohead/OK Computer</div>
+              </div>
+            </div>
+
+            <!-- Card 13: Normal cover -->
+            <div class="album-card">
+              <div class="cover-container">
+                <div class="cover-art cover-gradient-10">
+                  <div class="cover-art-inner">
+                    <div class="inner-text">BLOOM</div>
+                    <div class="inner-lines">
+                      <div class="inner-line" style="width:55%"></div>
+                      <div class="inner-line" style="width:75%"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="cover-badges">
+                  <span class="badge-pill badge-success">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    图片文件
+                  </span>
+                </div>
+              </div>
+              <div class="card-info">
+                <div class="card-album-name">Bloom</div>
+                <div class="card-artist-name">Beach House</div>
+                <div class="card-path">Beach House/Bloom</div>
+              </div>
+            </div>
+
+            <!-- Card 14: Missing cover -->
+            <div class="album-card">
+              <div class="cover-container">
+                <div class="cover-missing">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                  <span class="cover-missing-label">缺封面</span>
+                </div>
+                <div class="cover-badges">
+                  <span class="badge-pill badge-destructive">缺封面</span>
+                </div>
+              </div>
+              <div class="card-info">
+                <div class="card-album-name">Speakerboxxx</div>
+                <div class="card-artist-name">OutKast</div>
+                <div class="card-path">OutKast/Speakerboxxx/The Love Below</div>
+              </div>
+            </div>
+
+            <!-- Card 15: Selected card with cover -->
+            <div class="album-card selected">
+              <div class="cover-container">
+                <div class="cover-art cover-gradient-11">
+                  <div class="cover-art-inner">
+                    <div class="inner-circle"></div>
+                    <div class="inner-text">BLUE</div>
+                  </div>
+                </div>
+                <div class="cover-badges">
+                  <span class="badge-pill badge-success">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    图片文件
+                  </span>
+                </div>
+              </div>
+              <div class="card-info">
+                <div class="card-album-name">Blue Train</div>
+                <div class="card-artist-name">John Coltrane</div>
+                <div class="card-path">John Coltrane/Blue Train</div>
+              </div>
+            </div>
+
+            <!-- Card 16: DSD format, needs confirmation -->
+            <div class="album-card">
+              <div class="cover-container">
+                <div class="cover-art cover-gradient-12">
+                  <div class="cover-art-inner">
+                    <div class="inner-circle"></div>
+                    <div class="inner-lines">
+                      <div class="inner-line" style="width:60%"></div>
+                      <div class="inner-line" style="width:80%"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="cover-badges">
+                  <span class="badge-pill badge-warning">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                    需确认
+                  </span>
+                  <span class="format-tag">[DSD]</span>
+                </div>
+              </div>
+              <div class="card-info">
+                <div class="card-album-name">A Love Supreme</div>
+                <div class="card-artist-name">John Coltrane</div>
+                <div class="card-path">John Coltrane/A Love Supreme</div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+</div>
+
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+
+      /* Dark mode cover wall styles */
+      :root {
+        --bg-primary: #1e1e1e;
+        --bg-secondary: #252525;
+        --bg-tertiary: #2d2d2d;
+        --bg-elevated: #3a3a3a;
+        --text-primary: #ffffff;
+        --text-secondary: #a0a0a0;
+        --text-tertiary: #6e6e73;
+        --accent: #0a84ff;
+        --accent-bg: rgba(10, 132, 255, 0.12);
+        --accent-hover: #409cff;
+        --success: #30d158;
+        --success-bg: rgba(48, 209, 88, 0.12);
+        --warning: #ff9f0a;
+        --warning-bg: rgba(255, 159, 10, 0.12);
+        --destructive: #ff453a;
+        --destructive-bg: rgba(255, 69, 58, 0.12);
+        --border: rgba(255, 255, 255, 0.08);
+        --border-strong: rgba(255, 255, 255, 0.15);
+        --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.3);
+        --radius-sm: 6px;
+        --radius-md: 8px;
+        --radius-lg: 12px;
+        --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+      }
+
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+
+      html, body {
+        height: 100%;
+        overflow: hidden;
+        background: var(--bg-secondary);
+        color: var(--text-primary);
+        font-family: var(--font);
+        font-size: 13px;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+
+      .app-shell {
+        display: flex;
+        height: 100vh;
+      }
+
+      /* ── Sidebar ── */
+      .sidebar {
+        width: 200px;
+        min-width: 200px;
+        background: var(--bg-primary);
+        border-right: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        padding: 16px 12px;
+      }
+
+      .sidebar-brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 8px 16px;
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--text-primary);
+        letter-spacing: -0.2px;
+      }
+
+      .sidebar-brand svg { width: 22px; height: 22px; color: var(--accent); }
+
+      .sidebar-section-title {
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--text-tertiary);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        padding: 12px 8px 6px;
+      }
+
+      .sidebar-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 8px;
+        border-radius: var(--radius-sm);
+        color: var(--text-secondary);
+        font-size: 13px;
+        cursor: pointer;
+        transition: background 0.15s;
+        text-decoration: none;
+      }
+
+      .sidebar-item:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+      .sidebar-item.active { background: var(--accent-bg); color: var(--accent); }
+      .sidebar-item svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+      .sidebar-item .item-count {
+        margin-left: auto;
+        font-size: 11px;
+        color: var(--text-tertiary);
+      }
+
+      .sidebar-spacer { flex: 1; }
+
+      .sidebar-bottom {
+        padding-top: 12px;
+        border-top: 1px solid var(--border);
+      }
+
+      /* ── Main Content ── */
+      .main-content {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        background: var(--bg-secondary);
+      }
+
+      /* ── Top Bar ── */
+      .top-bar {
+        display: flex;
+        align-items: center;
+        padding: 12px 20px;
+        border-bottom: 1px solid var(--border);
+        gap: 12px;
+        flex-shrink: 0;
+      }
+
+      .top-bar-left {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1;
+      }
+
+      .top-bar-back {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px;
+        height: 28px;
+        border-radius: var(--radius-sm);
+        color: var(--text-secondary);
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s;
+        background: none;
+        border: none;
+      }
+      .top-bar-back:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+      .top-bar-back svg { width: 16px; height: 16px; }
+
+      .top-bar-title {
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--text-primary);
+        letter-spacing: -0.2px;
+      }
+
+      .top-bar-right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .btn-secondary {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 12px;
+        border-radius: var(--radius-sm);
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-secondary);
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border-strong);
+        cursor: pointer;
+        transition: background 0.15s, color 0.15s;
+        text-decoration: none;
+        font-family: var(--font);
+      }
+      .btn-secondary:hover { background: var(--bg-elevated); color: var(--text-primary); }
+      .btn-secondary svg { width: 14px; height: 14px; }
+
+      /* ── Stats Row ── */
+      .stats-row {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        padding: 8px 20px;
+        border-bottom: 1px solid var(--border);
+        flex-shrink: 0;
+      }
+
+      .stat-item {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 12px;
+        color: var(--text-tertiary);
+      }
+
+      .stat-item .stat-number {
+        font-weight: 600;
+        font-size: 12px;
+      }
+
+      .stat-item .stat-number.primary { color: var(--text-primary); }
+      .stat-item .stat-number.success { color: var(--success); }
+      .stat-item .stat-number.destructive { color: var(--destructive); }
+      .stat-item .stat-number.warning { color: var(--warning); }
+
+      .stat-separator {
+        width: 1px;
+        height: 12px;
+        background: var(--border-strong);
+      }
+
+      /* ── Filter + Search Row ── */
+      .filter-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 20px;
+        flex-shrink: 0;
+      }
+
+      .segmented-picker {
+        display: inline-flex;
+        background: var(--bg-tertiary);
+        border-radius: var(--radius-sm);
+        padding: 2px;
+        gap: 1px;
+      }
+
+      .segment-btn {
+        padding: 4px 12px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-secondary);
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        transition: all 0.15s;
+        font-family: var(--font);
+        white-space: nowrap;
+      }
+      .segment-btn:hover { color: var(--text-primary); }
+      .segment-btn.active {
+        background: var(--accent);
+        color: #ffffff;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+      }
+
+      .search-field {
+        flex: 1;
+        max-width: 320px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 10px;
+        background: var(--bg-tertiary);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        color: var(--text-secondary);
+        font-size: 12px;
+        font-family: var(--font);
+        transition: border-color 0.15s;
+      }
+      .search-field:focus-within { border-color: var(--accent); }
+      .search-field svg { width: 14px; height: 14px; flex-shrink: 0; }
+      .search-field input {
+        flex: 1;
+        background: transparent;
+        border: none;
+        outline: none;
+        color: var(--text-primary);
+        font-size: 12px;
+        font-family: var(--font);
+      }
+      .search-field input::placeholder { color: var(--text-tertiary); }
+
+      /* ── Album Grid ── */
+      .grid-scroll {
+        flex: 1;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 16px 20px 24px;
+      }
+
+      .album-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+        gap: 16px;
+      }
+
+      .album-card {
+        background: var(--bg-tertiary);
+        border-radius: var(--radius-lg);
+        overflow: hidden;
+        cursor: pointer;
+        transition: background 0.15s;
+        box-shadow: var(--shadow-card);
+        position: relative;
+      }
+      .album-card:hover { background: var(--bg-elevated); }
+      .album-card.selected { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+      .cover-container {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 1;
+        overflow: hidden;
+      }
+
+      .cover-art {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+
+      /* Cover art gradient placeholders */
+      .cover-gradient-1 { background: linear-gradient(135deg, #e85d75 0%, #c0392b 40%, #2c1810 100%); }
+      .cover-gradient-2 { background: linear-gradient(160deg, #3498db 0%, #2c3e50 60%, #1a1a2e 100%); }
+      .cover-gradient-3 { background: linear-gradient(180deg, #f39c12 0%, #d35400 50%, #1e1e1e 100%); }
+      .cover-gradient-4 { background: linear-gradient(200deg, #1abc9c 0%, #16a085 40%, #0d1b1e 100%); }
+      .cover-gradient-5 { background: linear-gradient(225deg, #9b59b6 0%, #6c3483 40%, #1a0a2e 100%); }
+      .cover-gradient-6 { background: linear-gradient(145deg, #e74c3c 0%, #c0392b 50%, #2d0a0a 100%); }
+      .cover-gradient-7 { background: linear-gradient(170deg, #2ecc71 0%, #27ae60 40%, #0a1e10 100%); }
+      .cover-gradient-8 { background: linear-gradient(135deg, #f1c40f 0%, #f39c12 30%, #2c1a00 100%); }
+      .cover-gradient-9 { background: linear-gradient(190deg, #1e5799 0%, #7db9e8 30%, #1a1a3e 100%); }
+      .cover-gradient-10 { background: linear-gradient(155deg, #8e44ad 0%, #2980b9 50%, #0d0d2b 100%); }
+      .cover-gradient-11 { background: linear-gradient(210deg, #e67e22 0%, #e74c3c 40%, #1e0d0a 100%); }
+      .cover-gradient-12 { background: linear-gradient(175deg, #00b894 0%, #00cec9 30%, #0a1e1e 100%); }
+
+      /* Missing cover placeholder */
+      .cover-missing {
+        width: 100%;
+        height: 100%;
+        background: var(--bg-primary);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+      }
+      .cover-missing svg { width: 32px; height: 32px; color: var(--text-tertiary); }
+      .cover-missing-label {
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--text-tertiary);
+      }
+
+      /* Status badges on cover */
+      .cover-badges {
+        position: absolute;
+        top: 6px;
+        left: 6px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 3px;
+      }
+
+      .badge-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.1px;
+        backdrop-filter: blur(8px);
+      }
+
+      .badge-pill svg { width: 10px; height: 10px; }
+
+      .badge-warning {
+        background: var(--warning-bg);
+        color: var(--warning);
+        border: 1px solid rgba(255, 159, 10, 0.2);
+      }
+
+      .badge-success {
+        background: var(--success-bg);
+        color: var(--success);
+        border: 1px solid rgba(48, 209, 88, 0.2);
+      }
+
+      .badge-destructive {
+        background: var(--destructive-bg);
+        color: var(--destructive);
+        border: 1px solid rgba(255, 69, 58, 0.2);
+      }
+
+      .format-tag {
+        font-size: 10px;
+        font-weight: 500;
+        color: var(--text-tertiary);
+        background: rgba(0, 0, 0, 0.5);
+        padding: 1px 5px;
+        border-radius: 3px;
+        letter-spacing: 0.3px;
+      }
+
+      /* Card info area */
+      .card-info {
+        padding: 8px 10px 10px;
+      }
+
+      .card-album-name {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-primary);
+        line-height: 1.3;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        letter-spacing: -0.1px;
+      }
+
+      .card-artist-name {
+        font-size: 11px;
+        color: var(--text-secondary);
+        line-height: 1.3;
+        margin-top: 1px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .card-path {
+        font-size: 10px;
+        color: var(--text-tertiary);
+        line-height: 1.3;
+        margin-top: 2px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      /* Warning triangle overlay */
+      .cover-warning-icon {
+        position: absolute;
+        bottom: 6px;
+        right: 6px;
+        width: 20px;
+        height: 20px;
+        background: rgba(255, 159, 10, 0.9);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+      }
+      .cover-warning-icon svg { width: 12px; height: 12px; color: #1e1e1e; }
+
+      /* Cover art inner decoration (simulate album art details) */
+      .cover-art-inner {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        opacity: 0.15;
+      }
+      .cover-art-inner .inner-lines {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 3px;
+        width: 50%;
+      }
+      .cover-art-inner .inner-line {
+        height: 2px;
+        border-radius: 1px;
+        background: rgba(255, 255, 255, 0.6);
+      }
+      .cover-art-inner .inner-circle {
+        width: 36px;
+        height: 36px;
+        border-radius: 50%;
+        border: 2px solid rgba(255, 255, 255, 0.4);
+        margin-bottom: 4px;
+      }
+      .cover-art-inner .inner-text {
+        font-size: 9px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        color: rgba(255, 255, 255, 0.5);
+      }
+    </style>
+</body>
+</html>

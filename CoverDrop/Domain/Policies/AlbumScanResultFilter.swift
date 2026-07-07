@@ -29,13 +29,18 @@ struct AlbumScanResultFiltering: Sendable {
     static func albums(
         in result: LibraryScanResult,
         filter: AlbumScanResultFilter,
-        query: String
+        query: String,
+        displayNames: ((AlbumScanRecord) -> (artistName: String, albumName: String))? = nil
     ) -> [AlbumScanRecord] {
         guard filter != .looseAudio else { return [] }
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
 
         return result.albums.filter { album in
-            matches(filter: filter, album: album) && matches(query: normalizedQuery, album: album)
+            matches(filter: filter, album: album) && matches(
+                query: normalizedQuery,
+                album: album,
+                displayNames: displayNames
+            )
         }
     }
 
@@ -71,13 +76,25 @@ struct AlbumScanResultFiltering: Sendable {
         }
     }
 
-    private static func matches(query: String, album: AlbumScanRecord) -> Bool {
+    private static func matches(
+        query: String,
+        album: AlbumScanRecord,
+        displayNames: ((AlbumScanRecord) -> (artistName: String, albumName: String))?
+    ) -> Bool {
         guard !query.isEmpty else { return true }
-        return [
+        var values = [
             album.albumName,
             album.artistName,
             album.folderURL.path
-        ].contains { value in
+        ]
+
+        if let displayNames {
+            let names = displayNames(album)
+            values.insert(names.albumName, at: 0)
+            values.insert(names.artistName, at: 0)
+        }
+
+        return values.contains { value in
             value.range(
                 of: query,
                 options: [.caseInsensitive, .diacriticInsensitive]

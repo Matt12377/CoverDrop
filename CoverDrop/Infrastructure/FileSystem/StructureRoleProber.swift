@@ -9,7 +9,7 @@ struct StructureRoleProber: DirectoryRoleProbing {
         ]
     }
 
-    func suggestRole(for url: URL) async throws -> DirectoryRoleSuggestion {
+    nonisolated func suggestRole(for url: URL) async throws -> DirectoryRoleSuggestion {
         try await Task.detached(priority: .userInitiated) {
             try Self.suggestRoleSynchronously(for: url)
         }.value
@@ -77,7 +77,12 @@ struct StructureRoleProber: DirectoryRoleProbing {
     }
 
     nonisolated private static func isAudioFile(_ url: URL) -> Bool {
-        audioExtensions.contains(url.pathExtension.lowercased())
+        guard audioExtensions.contains(url.pathExtension.lowercased()),
+              (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+            return false
+        }
+
+        return true
     }
 
     nonisolated private static func containsAudioDirectly(_ directory: URL) throws -> Bool {

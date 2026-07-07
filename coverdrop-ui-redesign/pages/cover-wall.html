@@ -1,0 +1,1295 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CoverDrop - 封面墙</title>
+    <style id="theme-vars">
+/*
+ * Pinguo design tokens
+ * Brand: Pinguo
+ * Domain: Consumer imaging product
+ * Style: Restrained, elegant, Apple-inspired
+ * Theme mode: light-dark
+ * Source language: zh
+ * Output language: en
+ *
+ * Color architecture (two layers):
+ *   1. Primitive palette - six categories. brand / background / text / icon
+ *      are each a 10-step scale (50 lightest to 900 darkest). state-success and
+ *      state-error are functional colors anchored on Apple system colors.
+ *      Anchors follow Apple Human Interface Guidelines system colors
+ *      (System Blue #007AFF, System Green #34C759, System Red #FF3B30,
+ *      system grays / label / background colors).
+ *   2. Semantic tokens - :root (light) and .dark map roles onto primitives.
+ *      Components and UI kits must only consume the semantic tokens below.
+ */
+
+/* @group-priority: brand, background, text, icon, state-success, state-error */
+
+:root {
+  /* ===== PRIMITIVE PALETTE ===== */
+
+  /* brand */
+  --brand-50: #e8f2ff;
+  --brand-100: #cfe5ff;
+  --brand-200: #9fcbff;
+  --brand-300: #66abff;
+  --brand-400: #2e8dff;
+  --brand-500: #007aff; /* @primary */
+  --brand-600: #0064d6;
+  --brand-700: #004fad;
+  --brand-800: #003b82;
+  --brand-900: #00275a;
+
+  /* background */
+  --background-50: #ffffff;
+  --background-100: #f7f7fa;
+  --background-200: #f2f2f7;
+  --background-300: #e5e5ea;
+  --background-400: #d1d1d6;
+  --background-500: #aeaeb2;
+  --background-600: #8e8e93;
+  --background-700: #3a3a3c;
+  --background-800: #1c1c1e;
+  --background-900: #000000;
+
+  /* text */
+  --text-50: #f5f5f7;
+  --text-100: #e3e3e8;
+  --text-200: #c7c7cc;
+  --text-300: #aeaeb2;
+  --text-400: #8e8e93;
+  --text-500: #6e6e73;
+  --text-600: #48484a;
+  --text-700: #3c3c43;
+  --text-800: #1d1d1f;
+  --text-900: #000000;
+
+  /* icon */
+  --icon-50: #f5f5f7;
+  --icon-100: #e5e5ea;
+  --icon-200: #d1d1d6;
+  --icon-300: #c7c7cc;
+  --icon-400: #aeaeb2;
+  --icon-500: #8e8e93;
+  --icon-600: #6e6e73;
+  --icon-700: #48484a;
+  --icon-800: #2c2c2e;
+  --icon-900: #1d1d1f;
+
+  /* state-success */
+  --state-success: #34c759; /* @primary */
+  --state-success-dark: #30d158;
+  --state-success-surface: #e9f9ee;
+  --state-success-foreground: #ffffff;
+
+  /* state-error */
+  --state-error: #ff3b30; /* @primary */
+  --state-error-dark: #ff453a;
+  --state-error-surface: #ffecea;
+  --state-error-foreground: #ffffff;
+
+  /* ===== SEMANTIC ROLES ===== */
+
+  /* semantic */
+  --background: var(--background-50);
+  --foreground: var(--text-800);
+  --card: var(--background-50);
+  --card-foreground: var(--text-800);
+  --popover: var(--background-50);
+  --popover-foreground: var(--text-900);
+
+  --primary: var(--brand-500);
+  --primary-foreground: var(--background-50);
+  --secondary: var(--background-200);
+  --secondary-foreground: var(--text-800);
+  --muted: var(--background-200);
+  --muted-foreground: var(--text-400);
+  --accent: var(--background-100);
+  --accent-foreground: var(--text-800);
+  --destructive: var(--state-error);
+  --destructive-foreground: var(--state-error-foreground);
+  --success: var(--state-success);
+  --success-foreground: var(--state-success-foreground);
+  --border: var(--background-300);
+  --input: var(--background-400);
+  --ring: var(--brand-500);
+
+  --icon: var(--icon-900);
+  --icon-muted: var(--icon-500);
+
+  /* chart */
+  --chart-1: var(--state-success);
+  --chart-2: var(--brand-500);
+  --chart-3: #ff9500;
+  --chart-4: #5856d6;
+  --chart-5: #af52de;
+
+  /* sidebar */
+  --sidebar: var(--background-200);
+  --sidebar-foreground: var(--text-800);
+  --sidebar-primary: var(--brand-500);
+  --sidebar-primary-foreground: var(--background-50);
+  --sidebar-accent: var(--background-300);
+  --sidebar-accent-foreground: var(--text-800);
+  --sidebar-border: var(--background-300);
+  --sidebar-ring: var(--brand-500);
+
+  /* TYPOGRAPHY */
+  --font-sans: DM Sans, ui-sans-serif, sans-serif, system-ui;
+  --font-serif: DM Sans, ui-sans-serif, sans-serif, system-ui;
+  --font-mono: JetBrains Mono, monospace;
+  --tracking-normal: 0em;
+
+  /* RADIUS */
+  --radius: 1.2rem;
+
+  /* SHADOWS */
+  --shadow-2xs: 0 1px 2px -1px rgba(0, 0, 0, 0.04); /* Hairline */
+  --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.04); /* Subtle */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05), 0 1px 3px -1px rgba(0, 0, 0, 0.05); /* Card */
+  --shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.06), 0 1px 2px -1px rgba(0, 0, 0, 0.05); /* Raised */
+  --shadow-md: 0 4px 8px -2px rgba(0, 0, 0, 0.06), 0 2px 4px -2px rgba(0, 0, 0, 0.05); /* Card Hover */
+  --shadow-lg: 0 8px 24px -8px rgba(0, 0, 0, 0.08), 0 4px 8px -4px rgba(0, 0, 0, 0.05); /* Float */
+  --shadow-xl: 0 16px 40px -10px rgba(0, 0, 0, 0.10), 0 8px 16px -8px rgba(0, 0, 0, 0.06); /* Overlay */
+  --shadow-2xl: 0 24px 64px -12px rgba(0, 0, 0, 0.12); /* Modal */
+
+  /* SPACING */
+  --spacing: 0.24rem;
+}
+
+/* ===== SEMANTIC ROLES - dark (primitive palette inherited) ===== */
+.dark {
+  --background: var(--background-900);
+  --foreground: var(--text-50);
+  --card: var(--background-800);
+  --card-foreground: var(--text-50);
+  --popover: var(--background-700);
+  --popover-foreground: var(--text-50);
+
+  --primary: var(--brand-400);
+  --primary-foreground: var(--background-900);
+  --secondary: var(--background-800);
+  --secondary-foreground: var(--text-50);
+  --muted: var(--background-800);
+  --muted-foreground: var(--text-400);
+  --accent: var(--background-700);
+  --accent-foreground: var(--text-50);
+  --destructive: var(--state-error-dark);
+  --destructive-foreground: var(--state-error-foreground);
+  --success: var(--state-success-dark);
+  --success-foreground: var(--state-success-foreground);
+  --border: var(--background-700);
+  --input: var(--background-700);
+  --ring: var(--brand-400);
+
+  --icon: var(--icon-50);
+  --icon-muted: var(--icon-500);
+
+  --chart-1: var(--state-success-dark);
+  --chart-2: var(--brand-400);
+  --chart-3: #ff9f0a;
+  --chart-4: #5e5ce6;
+  --chart-5: #bf5af2;
+
+  --sidebar: var(--background-800);
+  --sidebar-foreground: var(--text-50);
+  --sidebar-primary: var(--brand-400);
+  --sidebar-primary-foreground: var(--background-900);
+  --sidebar-accent: var(--background-700);
+  --sidebar-accent-foreground: var(--text-50);
+  --sidebar-border: var(--background-700);
+  --sidebar-ring: var(--brand-400);
+
+  --shadow-2xs: 0 1px 2px -1px rgba(0, 0, 0, 0.30);
+  --shadow-xs: 0 1px 2px 0 rgba(0, 0, 0, 0.30);
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.36), 0 1px 3px -1px rgba(0, 0, 0, 0.36);
+  --shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.40), 0 1px 2px -1px rgba(0, 0, 0, 0.36);
+  --shadow-md: 0 4px 8px -2px rgba(0, 0, 0, 0.44), 0 2px 4px -2px rgba(0, 0, 0, 0.36);
+  --shadow-lg: 0 8px 24px -8px rgba(0, 0, 0, 0.50), 0 4px 8px -4px rgba(0, 0, 0, 0.40);
+  --shadow-xl: 0 16px 40px -10px rgba(0, 0, 0, 0.55), 0 8px 16px -8px rgba(0, 0, 0, 0.44);
+  --shadow-2xl: 0 24px 64px -12px rgba(0, 0, 0, 0.60);
+}
+
+    </style>
+    <style id="component-vars">
+/*
+ * components.css - aggregated component CSS
+ * Auto-extracted from preview/component-*.html files.
+ * DO NOT EDIT. Regenerate with extract-components-css.mjs.
+ *
+ * Foundation tokens live in colors_and_type.css.
+ * This file consumes those tokens via var(--*) references.
+ */
+
+/* ============================================================
+ * Button
+ * source: preview/component-button.html
+ * rules: 10
+ */
+/* @anatomy
+   <div class="row"><span class="label">Primary 56</span><button class="btn btn-primary btn-lg">Buy now</button><button class="btn btn-primary btn-lg" disabled>Buy now</button></div>
+*/
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:calc(var(--spacing)*1.5);height:40px;padding:0 20px;border:none;border-radius:calc(var(--radius)*2);background:transparent;color:var(--foreground);font:600 14px/1 var(--font-sans);letter-spacing:var(--tracking-normal);white-space:nowrap;box-shadow:var(--shadow-sm);cursor:pointer;transition:background-color .18s ease,color .18s ease,opacity .18s ease,filter .18s ease}
+.btn:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.btn:disabled{opacity:.42;cursor:not-allowed}
+.btn-primary{background:var(--primary);color:var(--primary-foreground)}
+.btn-primary:hover{filter:brightness(.96)}
+.btn-secondary{height:48px;padding:0 24px;background:var(--secondary);color:var(--secondary-foreground)}
+.btn-secondary:hover{background:var(--muted)}
+.btn-text{height:48px;padding:0 4px;box-shadow:none}
+.btn-text:hover{color:var(--primary)}
+.btn-lg{height:56px;padding:0 28px;font-size:16px}
+
+/* ============================================================
+ * Card
+ * source: preview/component-card.html
+ * rules: 12
+ */
+/* @anatomy
+   <div class="row">
+   <span class="label">Info</span>
+   <article class="card">
+   <div><div class="eyebrow">Pinguo Apple</div>
+*/
+.card{width:188px;min-height:148px;padding:calc(var(--spacing)*5);display:flex;flex-direction:column;justify-content:space-between;background:var(--card);color:var(--card-foreground);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-md);transition:transform .18s ease,box-shadow .18s ease}
+.card:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg)}
+.card.disabled,.card.disabled:hover{opacity:.5;transform:none;box-shadow:var(--shadow-md)}
+.eyebrow,.meta{color:var(--muted-foreground);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+.title{margin:6px 0 8px;font-size:18px;line-height:1.15}
+.body-copy{margin:0;color:var(--muted-foreground);font-size:13px}
+.cta{display:inline-flex;align-items:center;justify-content:center;width:max-content;margin-top:12px;padding:calc(var(--spacing)*2) calc(var(--spacing)*3.5);border-radius:999px;background:var(--primary);color:var(--primary-foreground);font-size:12px;font-weight:700;text-decoration:none}
+.media{aspect-ratio:4/3;border-radius:calc(var(--radius) - 4px);background:linear-gradient(135deg,var(--secondary),var(--accent));border:1px solid var(--border)}
+.media-card{min-height:212px;padding:calc(var(--spacing)*4)}
+.media-card .title{font-size:16px;margin:10px 0 6px}
+.price{font-size:12px;color:var(--muted-foreground)}
+.dark{background:var(--card);color:var(--card-foreground)}
+
+/* ============================================================
+ * Comparison Table
+ * source: preview/component-comparison-table.html
+ * rules: 13
+ */
+/* @anatomy
+   <div class="row"><span class="label">Default</span><div class="t"><div class="c m">Compare models</div>
+*/
+.t{display:grid;grid-template-columns:96px repeat(3,1fr);overflow:hidden;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--card-foreground);box-shadow:var(--shadow-sm)}
+.q{grid-template-columns:82px repeat(4,1fr)}
+.c{padding:10px;border-right:1px solid var(--border);border-bottom:1px solid var(--border)}
+.t>.c:nth-child(4n),.q>.c:nth-child(5n){border-right:0}
+.t>.c:nth-last-child(-n+4),.q>.c:nth-last-child(-n+5){border-bottom:0}
+.m{background:var(--background);color:var(--muted-foreground);font:700 10px/1 var(--font-mono);letter-spacing:.12em;text-transform:uppercase}
+.h{background:var(--background);font-weight:700}
+.k{display:block;font-size:14px;line-height:1.1}
+.s{display:block;margin-top:4px;color:var(--chart-2);font-size:11px;font-weight:700}
+.b .k{color:var(--chart-2)}
+.v{font-weight:600}
+.n{color:var(--muted-foreground);font-size:12px}
+.x{opacity:.45}
+
+/* ============================================================
+ * Input
+ * source: preview/component-input.html
+ * rules: 10
+ */
+/* @anatomy
+   <div class="row">
+   <span class="label">Search 44</span>
+   <div class="field">
+   <span class="icon">⌕</span>
+   <input class="control" aria-label="Search products" placeholder="Search products">
+   <button class="clear" type="button" aria-label="Clear search">×</button>
+   </div>
+*/
+.surface{display:flex;gap:calc(var(--spacing)*2);padding:calc(var(--spacing)*3);border:1px solid var(--border);border-radius:var(--radius);background:var(--card);box-shadow:var(--shadow-sm)}
+.dark{background:var(--background);color:var(--foreground)}
+.field{display:flex;align-items:center;gap:calc(var(--spacing)*2);min-width:240px;height:44px;padding:0 calc(var(--spacing)*3);border:1px solid var(--input);border-radius:var(--radius);background:var(--background);color:var(--foreground);box-shadow:var(--shadow-xs)}
+.field.small{height:40px}
+.field:focus-within{border-color:var(--ring);box-shadow:0 0 0 1px var(--ring)}
+.field.disabled{opacity:.55}
+.icon,.clear{padding:0;border:0;background:transparent;color:var(--icon-muted);font:inherit}
+.icon{font-size:13px}
+.control{flex:1;border:0;outline:0;background:transparent;color:inherit;font:inherit}
+.control::placeholder{color:var(--muted-foreground)}
+
+/* ============================================================
+ * Navigation
+ * source: preview/component-navigation.html
+ * rules: 16
+ */
+/* @anatomy
+   <div class="row"><span class="label">Global 44</span><nav class="webbar dark" aria-label="Pinguo Apple global navigation"><span class="brand">Pinguo Apple</span><div class="rail"><a class="link" href="#">Store</a><a class="link" href="#">Explore</a><a class="link" href="#">Community</a><a class="link" href="#">Support</a></div>
+*/
+.webbar,.mobile{border:1px solid var(--border);box-shadow:var(--shadow-sm)}
+.webbar{display:flex;align-items:center;gap:calc(var(--spacing)*2);min-width:320px;height:44px;padding:0 calc(var(--spacing)*3);border-radius:var(--radius);background:var(--sidebar)}
+.brand{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
+.link,.tab{display:inline-flex;align-items:center;justify-content:center;border-radius:999px;color:inherit;text-decoration:none;white-space:nowrap;transition:background-color .18s ease,color .18s ease,opacity .18s ease}
+.link{height:32px;padding:0 calc(var(--spacing)*2.5)}
+.link:hover,.tab:hover{background:var(--secondary)}
+.link:focus-visible,.tab:focus-visible{outline:2px solid var(--ring);outline-offset:2px}
+.dark{background:var(--sidebar);color:var(--foreground)}
+.disabled{opacity:.48}
+.disabled .link,.disabled .tab{pointer-events:none}
+.mobile{padding:calc(var(--spacing)*2);border-radius:calc(var(--radius)*1.1);background:var(--card)}
+.screen{display:flex;align-items:flex-end;justify-content:center;width:188px;height:164px;padding:calc(var(--spacing)*3);border-radius:calc(var(--radius)*.9);background:linear-gradient(180deg,var(--background),var(--secondary))}
+.tabbar{display:flex;gap:calc(var(--spacing)*1.5);padding:calc(var(--spacing)*1.5);border:1px solid var(--border);border-radius:999px;background:var(--card);box-shadow:var(--shadow-md)}
+.tab{flex-direction:column;gap:2px;min-width:56px;height:56px;padding:0 calc(var(--spacing)*1.5);font-size:11px;text-align:center}
+.dot{width:18px;height:18px;border-radius:999px;background:var(--secondary);box-shadow:inset 0 0 0 1px var(--border)}
+.tab:hover .dot{background:var(--primary)}
+
+/* ============================================================
+ * Product Grid
+ * source: preview/component-product-grid.html
+ * rules: 12
+ */
+/* @anatomy
+   <div class="row">
+   <span class="label">4-up</span>
+   <div class="grid grid-4">
+   <article class="card"><div class="media"></div>
+*/
+.grid{display:grid;gap:8px;flex:1}
+.grid-4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.grid-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.card{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--card-foreground);box-shadow:var(--shadow-xs);transition:border-color .2s ease,transform .2s ease}
+.card:hover{border-color:var(--primary);transform:translateY(-1px)}
+.media{aspect-ratio:1;border-radius:calc(var(--radius) - 4px);background:linear-gradient(135deg,var(--secondary),var(--background));border:1px solid var(--border)}
+.eyebrow{color:var(--muted-foreground);font-size:10px;letter-spacing:.08em;text-transform:uppercase}
+.title{font-size:15px;line-height:1.25}
+.price{font-variant-numeric:tabular-nums}
+.cta{display:inline-flex;align-self:flex-start;padding:7px 10px;border-radius:999px;background:var(--primary);color:var(--primary-foreground);font-size:12px;text-decoration:none}
+.muted{color:var(--muted-foreground)}
+.is-disabled{opacity:.55}
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.1/dist/index.global.js"></script>
+    <script src="https://unpkg.com/lucide@1.8.0/dist/umd/lucide.min.js"></script>
+    <style type="text/tailwindcss">
+  @theme inline {
+    --color-foreground: var(--card-foreground);
+  }
+  @layer base {
+    body { background: var(--card-background); color: var(--card-foreground); }
+    td, th { @apply break-words; word-break: break-all; word-break: auto-phrase; }
+    th { @apply whitespace-nowrap; }
+  }
+    </style>
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+    </style>
+</head>
+<body class="min-h-screen font-sans antialiased">
+    <main>
+      <!-- macOS Window Frame -->
+      <div class="mac-window">
+        <!-- Window Chrome with Traffic Lights -->
+        <div class="window-chrome">
+          <div class="traffic-lights">
+            <div class="traffic-light close"></div>
+            <div class="traffic-light minimize"></div>
+            <div class="traffic-light maximize"></div>
+          </div>
+          <span class="window-title">CoverDrop</span>
+        </div>
+
+        <!-- App Layout -->
+        <div class="app-layout">
+          <!-- Sidebar -->
+          <div class="sidebar">
+            <div class="sidebar-brand">
+              <div class="sidebar-brand-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M9 18V5l12-2v13"/>
+                  <circle cx="6" cy="18" r="3"/>
+                  <circle cx="18" cy="16" r="3"/>
+                </svg>
+              </div>
+              <span class="sidebar-brand-text">CoverDrop</span>
+            </div>
+
+            <div class="sidebar-section-label">音乐库</div>
+
+            <div class="sidebar-list">
+              <!-- Active library -->
+              <div class="sidebar-item active">
+                <div class="sidebar-item-thumb">
+                  <div class="sidebar-item-thumb-inner sidebar-thumb-grad-1"></div>
+                </div>
+                <div class="sidebar-item-info">
+                  <div class="sidebar-item-name">我的音乐库</div>
+                  <div class="sidebar-item-path">~/Music</div>
+                </div>
+              </div>
+
+              <!-- Second library -->
+              <div class="sidebar-item">
+                <div class="sidebar-item-thumb">
+                  <div class="sidebar-item-thumb-inner sidebar-thumb-grad-2"></div>
+                </div>
+                <div class="sidebar-item-info">
+                  <div class="sidebar-item-name">古典音乐收藏</div>
+                  <div class="sidebar-item-path">~/Music/Classical</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="sidebar-bottom">
+              <button class="sidebar-add-btn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                  <line x1="12" y1="5" x2="12" y2="19"></line>
+                  <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+                添加音乐库
+              </button>
+            </div>
+          </div>
+
+          <!-- Main Content Area -->
+          <div class="main-content">
+            <!-- Top Bar -->
+            <div class="top-bar">
+              <div class="top-bar-left">
+                <div class="top-bar-title">我的音乐库</div>
+                <div class="top-bar-caption">
+                  路径：<code>~/Music</code> &mdash; 上次扫描于 2026-06-27 14:32
+                </div>
+              </div>
+              <a class="back-btn" href="#">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M19 12H5"/>
+                  <path d="M12 19l-7-7 7-7"/>
+                </svg>
+                返回音乐库
+              </a>
+            </div>
+
+            <!-- Stats Row -->
+            <div class="stats-row">
+              <div class="stat-chip">
+                <span class="stat-dot blue"></span>
+                48 专辑
+              </div>
+              <div class="stat-chip">
+                <span class="stat-dot green"></span>
+                32 已有封面
+              </div>
+              <div class="stat-chip">
+                <span class="stat-dot gray"></span>
+                16 缺封面
+              </div>
+              <div class="stat-chip">
+                <span class="stat-dot orange"></span>
+                5 需确认
+              </div>
+              <div class="stat-chip">
+                <span class="stat-dot purple"></span>
+                2 散落音频
+              </div>
+            </div>
+
+            <!-- Search + Filter Row -->
+            <div class="search-filter-row">
+              <div class="search-field">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"/>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                </svg>
+                <input type="text" placeholder="搜索专辑或歌手..." />
+              </div>
+
+              <div class="segmented-picker">
+                <button class="segment-btn active">全部</button>
+                <button class="segment-btn">缺封面</button>
+                <button class="segment-btn">需确认</button>
+                <button class="segment-btn">已有封面</button>
+                <button class="segment-btn">散落音频</button>
+              </div>
+            </div>
+
+            <!-- Album Grid -->
+            <div class="album-grid-scroll">
+              <div class="album-grid">
+
+                <!-- Album 1: Has cover, warm gradient -->
+                <div class="album-card">
+                  <div class="album-cover-wrapper">
+                    <div class="album-cover cover-gradient-1"></div>
+                    <span class="status-dot has-cover"></span>
+                  </div>
+                  <div class="album-info">
+                    <div class="album-name">随意域的旅行</div>
+                    <div class="album-meta">陈绮贞 <span class="album-meta-separator">&middot;</span> 12 首</div>
+                  </div>
+                </div>
+
+                <!-- Album 2: Has cover, green gradient -->
+                <div class="album-card">
+                  <div class="album-cover-wrapper">
+                    <div class="album-cover cover-gradient-2"></div>
+                    <span class="status-dot has-cover"></span>
+                  </div>
+                  <div class="album-info">
+                    <div class="album-name">海洋的回归</div>
+                    <div class="album-meta">许巍 <span class="album-meta-separator">&middot;</span> 10 首</div>
+                  </div>
+                </div>
+
+                <!-- Album 3: Needs attention (需确认) -->
+                <div class="album-card">
+                  <div class="album-cover-wrapper">
+                    <div class="album-cover cover-gradient-3"></div>
+                    <span class="status-dot attention"></span>
+                    <span class="cover-badge badge-attention">需确认</span>
+                  </div>
+                  <div class="album-info">
+                    <div class="album-name">港版 精选集</div>
+                    <div class="album-meta">张学友 <span class="album-meta-separator">&middot;</span> 16 首</div>
+                  </div>
+                </div>
+
+                <!-- Album 4: Saved cover with green badge -->
+                <div class="album-card">
+                  <div class="album-cover-wrapper">
+                    <div class="album-cover cover-gradient-4"></div>
+                    <span class="status-dot has-cover"></span>
+                    <span class="cover-badge badge-saved">已保存封面 &#10003;</span>
+                  </div>
+                  <div class="album-info">
+                    <div class="album-name">蓝色的旅途</div>
+                    <div class="album-meta">李志 <span class="album-meta-separator">&middot;</span> 11 首</div>
+                  </div>
+                </div>
+
+                <!-- Album 5: Missing cover -->
+                <div class="album-card">
+                  <div class="album-cover-wrapper">
+                    <div class="album-cover cover-missing">
+                      <svg class="music-note-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M9 18V5l12-2v13"/>
+                        <circle cx="6" cy="18" r="3"/>
+                        <circle cx="18" cy="16" r="3"/>
+                      </svg>
+                      <span class="cover-missing-label">缺封面</span>
+                    </div>
+                    <span class="status-dot missing"></span>
+                  </div>
+                  <div class="album-info">
+                    <div class="album-name">夜空中最亮的星</div>
+                    <div class="album-meta">逃跑计划 <span class="album-meta-separator">&middot;</span> 9 首</div>
+                  </div>
+                </div>
+
+                <!-- Album 6: Has cover, cool blue gradient -->
+                <div class="album-card">
+                  <div class="album-cover-wrapper">
+                    <div class="album-cover cover-gradient-5"></div>
+                    <span class="status-dot has-cover"></span>
+                  </div>
+                  <div class="album-info">
+                    <div class="album-name">山河入梦</div>
+                    <div class="album-meta">朴树 <span class="album-meta-separator">&middot;</span> 14 首</div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+    <script>lucide.createIcons();</script>
+
+    <style>
+      .no-scrollbar::-webkit-scrollbar { display: none; }
+      .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      [data-icon] {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        -webkit-mask-size: contain;
+        mask-size: contain;
+        -webkit-mask-repeat: no-repeat;
+        mask-repeat: no-repeat;
+        -webkit-mask-position: center;
+        mask-position: center;
+        background-color: currentColor;
+      }
+
+      /* ===== CoverDrop Cover Wall Custom Styles ===== */
+
+      :root {
+        --window-bg: var(--background-50);
+        --sidebar-width: 220px;
+        --warning-color: var(--state-warning);
+        --warning-surface: #fff5e6;
+        --success-dot: var(--state-success);
+        --missing-dot: var(--background-500);
+        --attention-dot: var(--state-warning);
+
+        /* Shadow tokens for body styles */
+        --shadow-overlay-frame: 0 0 0 0.5px rgba(0,0,0,0.12), 0 24px 80px -12px rgba(0,0,0,0.18), 0 8px 24px -4px rgba(0,0,0,0.08);
+        --shadow-brand-glow: 0 2px 8px rgba(0,122,255,0.3);
+        --shadow-cover-rest: 0 2px 8px rgba(0,0,0,0.06);
+        --shadow-cover-hover: 0 4px 16px rgba(0,0,0,0.1);
+        --shadow-status-dot: 0 1px 3px rgba(0,0,0,0.2);
+        --shadow-segment-active: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
+        --shadow-focus-ring: 0 0 0 3px rgba(0,122,255,0.12);
+
+        /* Traffic light border */
+        --traffic-light-border: rgba(0,0,0,0.12);
+
+        /* Album art gradient tokens */
+        --art-warm-1: #e85d4a;
+        --art-warm-2: #f4a261;
+        --art-warm-3: #e9c46a;
+        --art-teal-1: #264653;
+        --art-teal-2: #2a9d8f;
+        --art-purple-1: #6a0572;
+        --art-purple-2: #ab83a1;
+        --art-navy-1: #003049;
+        --art-blue-1: #0077b6;
+        --art-cyan-1: #90e0ef;
+        --art-blue-2: #3d5a80;
+        --art-blue-3: #98c1d9;
+        --art-ice-1: #e0fbfc;
+
+        /* Titlebar gradient */
+        --chrome-top: #ececec;
+        --chrome-bottom: #e2e2e2;
+
+        /* Hover overlay */
+        --hover-overlay: rgba(0,0,0,0.04);
+        --hover-subtle: rgba(0,0,0,0.03);
+
+        /* Badge bg */
+        --badge-attention-bg: rgba(255,149,0,0.9);
+        --badge-saved-bg: rgba(52,199,89,0.9);
+
+        /* Body page bg */
+        --page-bg: #e8e8ed;
+
+        /* Brand icon gradient */
+        --brand-icon-start: #007aff;
+        --brand-icon-end: #5856d6;
+      }
+
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+
+      body {
+        font-family: 'DM Sans', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+        background: var(--page-bg);
+        color: var(--text-800, #1d1d1f);
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 40px 24px;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+
+      /* macOS window frame */
+      .mac-window {
+        width: 100%;
+        max-width: 1200px;
+        background: var(--window-bg);
+        border-radius: 12px;
+        box-shadow: var(--shadow-overlay-frame);
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        max-height: 820px;
+      }
+
+      /* Traffic lights bar */
+      .window-chrome {
+        height: 52px;
+        background: linear-gradient(180deg, var(--chrome-top) 0%, var(--chrome-bottom) 100%);
+        border-bottom: 1px solid #d1d1d6;
+        display: flex;
+        align-items: center;
+        padding: 0 16px;
+        position: relative;
+        flex-shrink: 0;
+        -webkit-app-region: drag;
+      }
+
+      .traffic-lights {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .traffic-light {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        position: relative;
+      }
+
+      .traffic-light.close { background: var(--state-error); }
+      .traffic-light.minimize { background: var(--state-warning); }
+      .traffic-light.maximize { background: var(--state-success); }
+
+      .traffic-light::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        border: 0.5px solid var(--traffic-light-border);
+      }
+
+      .window-title {
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-500, #6e6e73);
+        letter-spacing: -0.01em;
+      }
+
+      /* App layout: sidebar + main */
+      .app-layout {
+        display: flex;
+        flex: 1;
+        overflow: hidden;
+      }
+
+      /* ===== Sidebar ===== */
+      .sidebar {
+        width: var(--sidebar-width);
+        background: var(--background-200, #f2f2f7);
+        border-right: 1px solid var(--background-300, #e5e5ea);
+        display: flex;
+        flex-direction: column;
+        flex-shrink: 0;
+        padding: 16px 0;
+      }
+
+      .sidebar-brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 4px 16px 16px;
+        border-bottom: 1px solid var(--background-300, #e5e5ea);
+        margin-bottom: 12px;
+      }
+
+      .sidebar-brand-icon {
+        width: 28px;
+        height: 28px;
+        background: linear-gradient(135deg, var(--brand-icon-start) 0%, var(--brand-icon-end) 100%);
+        border-radius: 7px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: var(--shadow-brand-glow);
+      }
+
+      .sidebar-brand-icon svg {
+        width: 16px;
+        height: 16px;
+        color: white;
+      }
+
+      .sidebar-brand-text {
+        font-size: 15px;
+        font-weight: 700;
+        color: var(--text-800, #1d1d1f);
+        letter-spacing: -0.02em;
+      }
+
+      .sidebar-section-label {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--text-400, #8e8e93);
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        padding: 8px 16px 6px;
+      }
+
+      .sidebar-list {
+        flex: 1;
+        overflow-y: auto;
+      }
+
+      .sidebar-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 7px 16px;
+        margin: 1px 8px;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: background-color 0.15s ease;
+        position: relative;
+      }
+
+      .sidebar-item:hover {
+        background: var(--hover-overlay);
+      }
+
+      .sidebar-item.active {
+        background: var(--brand-50, #e8f2ff);
+      }
+
+      .sidebar-item.active .sidebar-item-name {
+        color: var(--brand-500, #007aff);
+        font-weight: 600;
+      }
+
+      .sidebar-item-thumb {
+        width: 32px;
+        height: 32px;
+        border-radius: 6px;
+        flex-shrink: 0;
+        overflow: hidden;
+      }
+
+      .sidebar-item-thumb-inner {
+        width: 100%;
+        height: 100%;
+        border-radius: 6px;
+      }
+
+      /* Sidebar thumbnail gradient placeholders */
+      .sidebar-thumb-grad-1 { background: linear-gradient(135deg, var(--art-warm-1), var(--art-warm-2)); }
+      .sidebar-thumb-grad-2 { background: linear-gradient(135deg, var(--art-teal-1), var(--art-teal-2)); }
+
+      .sidebar-item-info {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .sidebar-item-name {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text-800, #1d1d1f);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        line-height: 1.2;
+      }
+
+      .sidebar-item-path {
+        font-size: 11px;
+        color: var(--text-400, #8e8e93);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        line-height: 1.2;
+        margin-top: 1px;
+      }
+
+      .sidebar-item.active .sidebar-item-path {
+        color: var(--brand-400, #2e8dff);
+      }
+
+      .sidebar-bottom {
+        padding: 12px 8px 4px;
+        border-top: 1px solid var(--background-300, #e5e5ea);
+        margin-top: auto;
+      }
+
+      .sidebar-add-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        width: calc(100% - 16px);
+        margin: 0 8px;
+        padding: 8px 12px;
+        border-radius: 8px;
+        border: 1px dashed var(--background-400, #d1d1d6);
+        background: transparent;
+        color: var(--text-500, #6e6e73);
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        font-family: inherit;
+      }
+
+      .sidebar-add-btn:hover {
+        background: var(--hover-subtle);
+        border-color: var(--background-500, #aeaeb2);
+        color: var(--text-700, #3c3c43);
+      }
+
+      .sidebar-add-btn svg {
+        width: 14px;
+        height: 14px;
+      }
+
+      /* ===== Main Content ===== */
+      .main-content {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        background: var(--background-50, #ffffff);
+      }
+
+      /* Top bar */
+      .top-bar {
+        display: flex;
+        align-items: center;
+        padding: 16px 24px 0;
+        flex-shrink: 0;
+        gap: 12px;
+      }
+
+      .top-bar-left {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .top-bar-title {
+        font-size: 22px;
+        font-weight: 700;
+        color: var(--text-800, #1d1d1f);
+        letter-spacing: -0.02em;
+        line-height: 1.2;
+      }
+
+      .top-bar-caption {
+        font-size: 12px;
+        color: var(--text-400, #8e8e93);
+        margin-top: 2px;
+        line-height: 1.3;
+      }
+
+      .top-bar-caption code {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 11px;
+        background: var(--background-200, #f2f2f7);
+        padding: 1px 5px;
+        border-radius: 4px;
+        color: var(--text-500, #6e6e73);
+      }
+
+      .back-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 6px 14px;
+        border-radius: 8px;
+        border: 1px solid var(--background-300, #e5e5ea);
+        background: var(--background-50, #ffffff);
+        color: var(--brand-500, #007aff);
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        white-space: nowrap;
+        text-decoration: none;
+        font-family: inherit;
+      }
+
+      .back-btn:hover {
+        background: var(--brand-50, #e8f2ff);
+        border-color: var(--brand-200, #9fcbff);
+      }
+
+      .back-btn svg {
+        width: 14px;
+        height: 14px;
+      }
+
+      /* Stats row */
+      .stats-row {
+        display: flex;
+        gap: 8px;
+        padding: 12px 24px 0;
+        flex-shrink: 0;
+        flex-wrap: wrap;
+      }
+
+      .stat-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 12px;
+        border-radius: 999px;
+        background: var(--background-100, #f7f7fa);
+        border: 1px solid var(--background-300, #e5e5ea);
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-600, #48484a);
+        white-space: nowrap;
+      }
+
+      .stat-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+
+      .stat-dot.green { background: var(--success-dot, #34c759); }
+      .stat-dot.gray { background: var(--missing-dot, #aeaeb2); }
+      .stat-dot.orange { background: var(--attention-dot, #ff9500); }
+      .stat-dot.blue { background: var(--brand-500, #007aff); }
+      .stat-dot.purple { background: var(--chart-4, #5856d6); }
+
+      /* Search + filter row */
+      .search-filter-row {
+        display: flex;
+        gap: 10px;
+        padding: 12px 24px 0;
+        flex-shrink: 0;
+        align-items: center;
+      }
+
+      .search-field {
+        flex: 1;
+        min-width: 180px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 36px;
+        padding: 0 12px;
+        border: 1px solid var(--background-300, #e5e5ea);
+        border-radius: 8px;
+        background: var(--background-100, #f7f7fa);
+        transition: all 0.15s ease;
+      }
+
+      .search-field:focus-within {
+        border-color: var(--brand-500, #007aff);
+        box-shadow: var(--shadow-focus-ring);
+        background: var(--background-50, #ffffff);
+      }
+
+      .search-field svg {
+        width: 15px;
+        height: 15px;
+        color: var(--text-400, #8e8e93);
+        flex-shrink: 0;
+      }
+
+      .search-field input {
+        flex: 1;
+        border: none;
+        outline: none;
+        background: transparent;
+        font-size: 13px;
+        font-family: inherit;
+        color: var(--text-800, #1d1d1f);
+      }
+
+      .search-field input::placeholder {
+        color: var(--text-400, #8e8e93);
+      }
+
+      /* Segmented picker */
+      .segmented-picker {
+        display: flex;
+        background: var(--background-200, #f2f2f7);
+        border-radius: 8px;
+        padding: 2px;
+        gap: 1px;
+        flex-shrink: 0;
+      }
+
+      .segment-btn {
+        padding: 5px 13px;
+        border-radius: 6px;
+        border: none;
+        background: transparent;
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-500, #6e6e73);
+        cursor: pointer;
+        transition: all 0.15s ease;
+        white-space: nowrap;
+        font-family: inherit;
+      }
+
+      .segment-btn:hover {
+        color: var(--text-700, #3c3c43);
+      }
+
+      .segment-btn.active {
+        background: var(--background-50, #ffffff);
+        color: var(--text-800, #1d1d1f);
+        font-weight: 600;
+        box-shadow: var(--shadow-segment-active);
+      }
+
+      /* ===== Album Grid ===== */
+      .album-grid-scroll {
+        flex: 1;
+        overflow-y: auto;
+        padding: 16px 24px 24px;
+      }
+
+      .album-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(160px, 190px));
+        gap: 18px;
+      }
+
+      .album-card {
+        display: flex;
+        flex-direction: column;
+        cursor: pointer;
+        transition: transform 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+                    box-shadow 0.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+      }
+
+      .album-card:hover {
+        transform: scale(1.02);
+      }
+
+      .album-cover-wrapper {
+        position: relative;
+        width: 100%;
+        aspect-ratio: 1;
+        border-radius: 14px;
+        overflow: hidden;
+        box-shadow: var(--shadow-cover-rest);
+        transition: box-shadow 0.2s ease;
+      }
+
+      .album-card:hover .album-cover-wrapper {
+        box-shadow: var(--shadow-cover-hover);
+      }
+
+      .album-cover {
+        width: 100%;
+        height: 100%;
+        border-radius: 14px;
+      }
+
+      /* Cover placeholder gradients */
+      .cover-gradient-1 {
+        background: linear-gradient(145deg, var(--art-warm-1) 0%, var(--art-warm-2) 50%, var(--art-warm-3) 100%);
+      }
+      .cover-gradient-2 {
+        background: linear-gradient(145deg, var(--art-teal-1) 0%, var(--art-teal-2) 50%, var(--art-warm-3) 100%);
+      }
+      .cover-gradient-3 {
+        background: linear-gradient(145deg, var(--art-purple-1) 0%, var(--art-purple-2) 50%, var(--art-warm-3) 100%);
+      }
+      .cover-gradient-4 {
+        background: linear-gradient(145deg, var(--art-navy-1) 0%, var(--art-blue-1) 50%, var(--art-cyan-1) 100%);
+      }
+      .cover-gradient-5 {
+        background: linear-gradient(145deg, var(--art-blue-2) 0%, var(--art-blue-3) 50%, var(--art-ice-1) 100%);
+      }
+      .cover-missing {
+        background: var(--background-200, #f2f2f7);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        border: 2px dashed var(--background-400, #d1d1d6);
+      }
+
+      .cover-missing svg {
+        width: 32px;
+        height: 32px;
+        color: var(--background-500, #aeaeb2);
+      }
+
+      .cover-missing-label {
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--background-600, #8e8e93);
+      }
+
+      /* Status dot on cover */
+      .status-dot {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        box-shadow: var(--shadow-status-dot);
+        z-index: 2;
+      }
+
+      .status-dot.has-cover { background: var(--success-dot, #34c759); }
+      .status-dot.missing { background: var(--missing-dot, #aeaeb2); }
+      .status-dot.attention { background: var(--attention-dot, #ff9500); }
+
+      /* Badge overlay */
+      .cover-badge {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        padding: 3px 8px;
+        border-radius: 6px;
+        font-size: 10px;
+        font-weight: 600;
+        z-index: 2;
+        letter-spacing: 0.01em;
+      }
+
+      .badge-attention {
+        background: var(--badge-attention-bg);
+        color: var(--primary-foreground);
+        backdrop-filter: blur(4px);
+      }
+
+      .badge-saved {
+        background: var(--badge-saved-bg);
+        color: var(--primary-foreground);
+        backdrop-filter: blur(4px);
+      }
+
+      /* Album info below cover */
+      .album-info {
+        padding: 8px 2px 0;
+      }
+
+      .album-name {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-800, #1d1d1f);
+        line-height: 1.25;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        letter-spacing: -0.01em;
+      }
+
+      .album-meta {
+        font-size: 11px;
+        color: var(--text-500, #6e6e73);
+        margin-top: 2px;
+        line-height: 1.3;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .album-meta-separator {
+        color: var(--background-400, #d1d1d6);
+      }
+
+      /* Music note SVG icon for missing covers */
+      .music-note-icon {
+        opacity: 0.5;
+      }
+    </style>
+</body>
+</html>

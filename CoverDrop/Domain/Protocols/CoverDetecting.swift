@@ -6,5 +6,5 @@ struct CoverDetectionResult: Equatable, Sendable {
 }
 
 protocol CoverDetecting: Sendable {
-    func detectCover(in albumURL: URL) async throws -> CoverDetectionResult
+    nonisolated func detectCover(in albumURL: URL) async throws -> CoverDetectionResult
 }

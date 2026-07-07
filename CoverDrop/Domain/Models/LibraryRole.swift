@@ -6,7 +6,7 @@ enum LibraryRole: String, CaseIterable, Codable, Sendable {
     case artist
     case album
 
-    var displayName: String {
+    nonisolated var displayName: String {
         switch self {
         case .library:
             "音乐库"

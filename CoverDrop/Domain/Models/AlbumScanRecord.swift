@@ -32,7 +32,7 @@ struct AudioMetadata: Equatable, Sendable {
 }
 
 struct AudioFileRecord: Identifiable, Equatable, Sendable {
-    var id: String { relativePath }
+    nonisolated var id: String { relativePath }
     let url: URL
     let relativePath: String
     let format: String
@@ -44,7 +44,7 @@ enum CoverSource: Equatable, Sendable {
     case file
     case embeddedArtwork
 
-    var displayName: String {
+    nonisolated var displayName: String {
         switch self {
         case .file:
             "图片文件"
@@ -55,7 +55,7 @@ enum CoverSource: Equatable, Sendable {
 }
 
 struct CoverCandidate: Identifiable, Equatable, Sendable {
-    var id: String { url.path }
+    nonisolated var id: String { url.path }
     let url: URL
     let previewURL: URL?
     let relativePath: String
@@ -79,7 +79,7 @@ struct CoverCandidate: Identifiable, Equatable, Sendable {
         self.source = source
     }
 
-    var displayURL: URL {
+    nonisolated var displayURL: URL {
         previewURL ?? url
     }
 }
@@ -91,7 +91,7 @@ enum AlbumScanIssue: Equatable, Sendable {
     case uncertainAlbumBoundary(reason: String)
     case trackNamedAudioFiles(paths: [String])
 
-    var displayName: String {
+    nonisolated var displayName: String {
         switch self {
         case .singleFileNeedsConfirmation(let hasCue):
             hasCue ? "单文件整轨，需要确认" : "单文件发行，需要确认"
@@ -108,7 +108,7 @@ enum AlbumScanIssue: Equatable, Sendable {
 }
 
 struct AlbumScanRecord: Identifiable, Equatable, Sendable {
-    var id: String { folderURL.path }
+    nonisolated var id: String { folderURL.path }
     let folderURL: URL
     let artistName: String
     let albumName: String
@@ -116,18 +116,18 @@ struct AlbumScanRecord: Identifiable, Equatable, Sendable {
     let displayedCover: CoverCandidate?
     let issues: [AlbumScanIssue]
 
-    var needsAttention: Bool { !issues.isEmpty }
+    nonisolated var needsAttention: Bool { !issues.isEmpty }
 }
 
 struct LibraryScanResult: Equatable, Sendable {
     let albums: [AlbumScanRecord]
     let looseAudioPaths: [String]
 
-    var albumsWithCover: Int {
+    nonisolated var albumsWithCover: Int {
         albums.count { $0.displayedCover != nil }
     }
 
-    var albumsNeedingAttention: Int {
+    nonisolated var albumsNeedingAttention: Int {
         albums.count { $0.needsAttention }
     }
 }
