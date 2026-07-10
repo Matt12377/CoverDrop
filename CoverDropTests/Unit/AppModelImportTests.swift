@@ -635,6 +635,7 @@ struct AppModelImportTests {
             )
 
             let libraryID = try #require(appModel.selectedLibraryID)
+            appModel.requestAlbumNameEnhancement(forLibraryID: libraryID)
             await waitForAlbumNameEnhancement(toFinishIn: appModel, libraryID: libraryID)
 
             #expect(appModel.displayArtistName(for: album) == "LLM 歌手")
@@ -659,6 +660,7 @@ struct AppModelImportTests {
             )
 
             let libraryID = try #require(appModel.selectedLibraryID)
+            appModel.requestAlbumNameEnhancement(forLibraryID: libraryID)
             await waitForAlbumNameEnhancement(toFinishIn: appModel, libraryID: libraryID)
 
             #expect(appModel.displayArtistName(for: album) == "Artist")
@@ -671,8 +673,8 @@ struct AppModelImportTests {
         }
     }
 
-    @Test("名称增强默认只处理缺封面的专辑")
-    func enhancementPrioritizesAlbumsMissingCover() async throws {
+    @Test("扫描完成后不自动进行名称增强")
+    func scanningDoesNotStartNameEnhancementAutomatically() async throws {
         try await withTemporaryDirectory { root in
             let coveredFirst = makeAlbum(
                 folderURL: root.appendingPathComponent("Artist/01 Covered", isDirectory: true),
@@ -700,13 +702,9 @@ struct AppModelImportTests {
             )
 
             let libraryID = try #require(appModel.selectedLibraryID)
-            await waitForAlbumNameEnhancement(toFinishIn: appModel, libraryID: libraryID)
-
-            let processedAlbumNames = await recorder.albumNames()
-            #expect(processedAlbumNames == [
-                "02 Missing",
-                "03 Missing"
-            ])
+            try await Task.sleep(nanoseconds: 60_000_000)
+            #expect(await recorder.albumNames().isEmpty)
+            #expect(appModel.albumNameEnhancementStatus(for: libraryID)?.isRunning != true)
         }
     }
 
@@ -725,6 +723,7 @@ struct AppModelImportTests {
             )
 
             let libraryID = try #require(appModel.selectedLibraryID)
+            appModel.requestAlbumNameEnhancement(forLibraryID: libraryID)
             await waitForAlbumNameEnhancement(toFinishIn: appModel, libraryID: libraryID)
             await waitUntil { suggester.releaseCount() == 1 }
 
@@ -750,6 +749,7 @@ struct AppModelImportTests {
 
             let libraryID = try #require(appModel.selectedLibraryID)
             #expect(appModel.activeScanSnapshot(for: libraryID) != nil)
+            appModel.requestAlbumNameEnhancement(forLibraryID: libraryID)
             await waitUntil { await suggester.albumNames() == ["Missing"] }
 
             let startedAt = Date()
@@ -906,7 +906,7 @@ struct AppModelImportTests {
         }
     }
 
-    @Test("手动识别会在当前 Ollama 请求后优先于剩余自动批处理执行")
+    @Test("单专辑手动识别会在当前音乐库请求后优先于剩余批处理执行")
     func manualEnhancementIsInsertedAfterCurrentRunningAlbum() async throws {
         try await withTemporaryDirectory { root in
             let autoFirst = makeAlbum(
@@ -929,6 +929,8 @@ struct AppModelImportTests {
                 albumNameSuggesting: suggester
             )
 
+            let libraryID = try #require(appModel.selectedLibraryID)
+            appModel.requestAlbumNameEnhancement(forLibraryID: libraryID)
             await waitUntil { await suggester.albumNames() == ["Auto First"] }
             appModel.requestAlbumNameEnhancement(forAlbumID: manualCovered.id)
 
@@ -1008,8 +1010,8 @@ struct AppModelImportTests {
         }
     }
 
-    @Test("音乐库智能解析会处理已有封面的专辑")
-    func libraryEnhancementHandlesCoveredAlbums() async throws {
+    @Test("音乐库智能解析只处理缺封面的专辑")
+    func libraryEnhancementOnlyHandlesMissingCoverAlbums() async throws {
         try await withTemporaryDirectory { root in
             let covered = makeAlbum(
                 folderURL: root.appendingPathComponent("Artist/Covered", isDirectory: true),
@@ -1028,34 +1030,63 @@ struct AppModelImportTests {
             )
 
             let libraryID = try #require(appModel.selectedLibraryID)
-            await waitForAlbumNameEnhancement(toFinishIn: appModel, libraryID: libraryID)
-            await recorder.reset()
-
             appModel.requestAlbumNameEnhancement(forLibraryID: libraryID)
             await waitForAlbumNameEnhancement(toFinishIn: appModel, libraryID: libraryID)
 
-            #expect(await recorder.albumNames() == ["Covered", "Missing"])
-            #expect(appModel.albumNameEnhancementProgress(for: libraryID)?.isFinished == true)
+            #expect(await recorder.albumNames() == ["Missing"])
+            let progress = try #require(appModel.albumNameEnhancementProgress(for: libraryID))
+            #expect(progress.completedAlbums == 1)
+            #expect(progress.totalAlbums == 1)
+            #expect(progress.isFinished)
+        }
+    }
+
+    @Test("音乐库智能解析没有缺封面专辑时保持零进度")
+    func libraryEnhancementWithoutMissingCoverAlbumsKeepsZeroProgress() async throws {
+        try await withTemporaryDirectory { root in
+            let covered = makeAlbum(
+                folderURL: root.appendingPathComponent("Artist/Covered", isDirectory: true),
+                albumName: "Covered",
+                hasCover: true
+            )
+            let recorder = AlbumNameSuggestionRecorder()
+            let appModel = await makeScannedAppModel(
+                root: root,
+                albums: [covered],
+                albumNameSuggesting: RecordingAlbumNameSuggesting(recorder: recorder)
+            )
+
+            let libraryID = try #require(appModel.selectedLibraryID)
+            appModel.requestAlbumNameEnhancement(forLibraryID: libraryID)
+
+            #expect(await recorder.albumNames().isEmpty)
+            let progress = try #require(appModel.albumNameEnhancementProgress(for: libraryID))
+            #expect(progress.completedAlbums == 0)
+            #expect(progress.totalAlbums == 0)
+            #expect(appModel.albumNameEnhancementStatus(for: libraryID)?.isRunning == false)
         }
     }
 
     @Test("音乐库智能解析运行时提供进度")
     func libraryEnhancementReportsProgress() async throws {
         try await withTemporaryDirectory { root in
+            let covered = makeAlbum(
+                folderURL: root.appendingPathComponent("Artist/Covered", isDirectory: true),
+                albumName: "Covered",
+                hasCover: true
+            )
             let first = makeAlbum(
                 folderURL: root.appendingPathComponent("Artist/First", isDirectory: true),
-                albumName: "First",
-                hasCover: true
+                albumName: "First"
             )
             let second = makeAlbum(
                 folderURL: root.appendingPathComponent("Artist/Second", isDirectory: true),
-                albumName: "Second",
-                hasCover: true
+                albumName: "Second"
             )
             let suggester = BlockingRecordingAlbumNameSuggesting()
             let appModel = await makeScannedAppModel(
                 root: root,
-                albums: [first, second],
+                albums: [covered, first, second],
                 albumNameSuggesting: suggester
             )
             let libraryID = try #require(appModel.selectedLibraryID)
@@ -1087,6 +1118,77 @@ struct AppModelImportTests {
             #expect(finishedProgress.totalAlbums == 2)
             #expect(finishedProgress.isFinished)
             #expect(finishedProgress.actionDescription == "智能解析完成")
+        }
+    }
+
+    @Test("停止音乐库智能解析会取消当前请求并清空后续队列")
+    func stoppingLibraryEnhancementCancelsOnlyCurrentBatch() async throws {
+        try await withTemporaryDirectory { root in
+            let first = makeAlbum(
+                folderURL: root.appendingPathComponent("Artist/First", isDirectory: true),
+                albumName: "First"
+            )
+            let second = makeAlbum(
+                folderURL: root.appendingPathComponent("Artist/Second", isDirectory: true),
+                albumName: "Second"
+            )
+            let suggester = CancellationAwareBlockingAlbumNameSuggesting()
+            let appModel = await makeScannedAppModel(
+                root: root,
+                albums: [first, second],
+                albumNameSuggesting: suggester
+            )
+            let libraryID = try #require(appModel.selectedLibraryID)
+
+            appModel.requestAlbumNameEnhancement(forLibraryID: libraryID)
+            await waitUntil { suggester.albumNames() == ["First"] }
+            appModel.stopAlbumNameEnhancement(forLibraryID: libraryID)
+            await waitUntil { suggester.cancelledRequestCount() == 1 }
+            try await Task.sleep(nanoseconds: 60_000_000)
+
+            #expect(suggester.albumNames() == ["First"])
+            #expect(appModel.hasEnhancedAlbumName(for: first, in: libraryID) == false)
+            #expect(appModel.hasEnhancedAlbumName(for: second, in: libraryID) == false)
+            #expect(appModel.albumNameEnhancementStatus(for: libraryID)?.isRunning == false)
+            let progress = try #require(appModel.albumNameEnhancementProgress(for: libraryID))
+            #expect(progress.completedAlbums == 0)
+            #expect(progress.totalAlbums == 2)
+        }
+    }
+
+    @Test("停止后重新智能解析会重新处理被取消的当前专辑")
+    func restartingLibraryEnhancementRequeuesCancelledCurrentAlbum() async throws {
+        try await withTemporaryDirectory { root in
+            let first = makeAlbum(
+                folderURL: root.appendingPathComponent("Artist/First", isDirectory: true),
+                albumName: "First"
+            )
+            let second = makeAlbum(
+                folderURL: root.appendingPathComponent("Artist/Second", isDirectory: true),
+                albumName: "Second"
+            )
+            let suggester = BlockingRecordingAlbumNameSuggesting()
+            let appModel = await makeScannedAppModel(
+                root: root,
+                albums: [first, second],
+                albumNameSuggesting: suggester
+            )
+            let libraryID = try #require(appModel.selectedLibraryID)
+
+            appModel.requestAlbumNameEnhancement(forLibraryID: libraryID)
+            await waitUntil { suggester.albumNames() == ["First"] }
+            appModel.stopAlbumNameEnhancement(forLibraryID: libraryID)
+            appModel.requestAlbumNameEnhancement(forLibraryID: libraryID)
+
+            suggester.releaseNext()
+            await waitUntil { suggester.albumNames() == ["First", "First"] }
+            suggester.releaseNext()
+            await waitUntil { suggester.albumNames() == ["First", "First", "Second"] }
+            suggester.releaseNext()
+            await waitForAlbumNameEnhancement(toFinishIn: appModel, libraryID: libraryID)
+
+            #expect(appModel.hasEnhancedAlbumName(for: first, in: libraryID))
+            #expect(appModel.hasEnhancedAlbumName(for: second, in: libraryID))
         }
     }
 
@@ -1281,8 +1383,8 @@ struct AppModelImportTests {
         }
     }
 
-    @Test("实时局部刷新后专辑变成缺封面会进入名称增强队列")
-    func realtimeRefreshEnhancesAlbumThatBecomesMissingCover() async throws {
+    @Test("实时局部刷新后专辑变成缺封面不会自动解析")
+    func realtimeRefreshDoesNotEnhanceAlbumThatBecomesMissingCoverAutomatically() async throws {
         try await withTemporaryDirectory { root in
             let albumFolder = root.appendingPathComponent("Artist/Album", isDirectory: true)
             let coveredAlbum = makeAlbum(
@@ -1317,10 +1419,11 @@ struct AppModelImportTests {
 
             monitor.emit(rootURL: root, changedPaths: ["Artist/Album/cover.jpg"])
             await waitUntil { await scanner.rescanCount() == 1 }
-            await waitUntil { await recorder.albumNames() == ["Album"] }
+            try await Task.sleep(nanoseconds: 60_000_000)
 
             #expect(appModel.scanResultsByLibraryID[libraryID]?.albums.first?.displayedCover == nil)
-            #expect(await recorder.albumNames() == ["Album"])
+            #expect(await recorder.albumNames().isEmpty)
+            #expect(appModel.albumNameEnhancementStatus(for: libraryID)?.isRunning != true)
         }
     }
 
@@ -1480,8 +1583,8 @@ struct AppModelImportTests {
         }
     }
 
-    @Test("实时局部刷新只为音频结构变化的专辑重新增强名称")
-    func realtimeRefreshOnlyEnhancesChangedAlbums() async throws {
+    @Test("实时局部刷新不会自动重新增强名称")
+    func realtimeRefreshDoesNotEnhanceChangedAlbumsAutomatically() async throws {
         try await withTemporaryDirectory { root in
             let unchangedAlbum = makeAlbum(
                 folderURL: root.appendingPathComponent("Artist/Unchanged", isDirectory: true),
@@ -1513,18 +1616,17 @@ struct AppModelImportTests {
             )
 
             let libraryID = try #require(appModel.selectedLibraryID)
-            await waitForAlbumNameEnhancement(toFinishIn: appModel, libraryID: libraryID)
-            #expect(appModel.hasEnhancedAlbumName(for: unchangedAlbum, in: libraryID))
-            await recorder.reset()
+            #expect(appModel.hasEnhancedAlbumName(for: unchangedAlbum, in: libraryID) == false)
             await waitUntil { monitor.hasSubscriber(for: root) }
 
             monitor.emit(rootURL: root, changedPaths: ["Artist/Changed/02.wav"])
             await waitUntil { await scanner.rescanCount() == 1 }
-            await waitUntil { await recorder.albumNames() == ["Changed"] }
+            try await Task.sleep(nanoseconds: 60_000_000)
 
             #expect(await scanner.scanCount() == 1)
-            #expect(appModel.hasEnhancedAlbumName(for: unchangedAlbum, in: libraryID))
-            #expect(await recorder.albumNames() == ["Changed"])
+            #expect(appModel.hasEnhancedAlbumName(for: unchangedAlbum, in: libraryID) == false)
+            #expect(appModel.hasEnhancedAlbumName(for: changedAlbumAfterRefresh, in: libraryID) == false)
+            #expect(await recorder.albumNames().isEmpty)
         }
     }
 
@@ -1822,6 +1924,76 @@ private final class BlockingRecordingAlbumNameSuggesting: AlbumNameSuggesting, @
             continuations.isEmpty ? nil : continuations.removeFirst()
         }
         continuation?.resume()
+    }
+
+    func reset() {
+        lock.withLock {
+            processedAlbumNames = []
+            continuations = []
+        }
+    }
+}
+
+private final class CancellationAwareBlockingAlbumNameSuggesting: AlbumNameSuggesting, @unchecked Sendable {
+    private let lock = NSLock()
+    private var processedAlbumNames: [String] = []
+    private var continuations: [CheckedContinuation<Void, Error>] = []
+    private var cancellationCount = 0
+    private var isCancelled = false
+
+    func suggestAlbumName(for input: AlbumNameEnhancementInput) async throws -> AlbumNameSuggestion {
+        let originalArtistName = input.originalArtistName
+        let originalAlbumName = input.originalAlbumName
+        lock.withLock {
+            processedAlbumNames.append(originalAlbumName)
+        }
+
+        try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation { continuation in
+                let shouldCancel = lock.withLock { () -> Bool in
+                    if isCancelled {
+                        return true
+                    }
+                    continuations.append(continuation)
+                    return false
+                }
+                if shouldCancel {
+                    continuation.resume(throwing: CancellationError())
+                }
+            }
+        }, onCancel: { [weak self] in
+            self?.cancelPendingRequests()
+        })
+
+        return AlbumNameSuggestion(
+            artistName: originalArtistName,
+            albumName: "\(originalAlbumName) Enhanced"
+        )
+    }
+
+    func albumNames() -> [String] {
+        lock.withLock {
+            processedAlbumNames
+        }
+    }
+
+    func cancelledRequestCount() -> Int {
+        lock.withLock {
+            cancellationCount
+        }
+    }
+
+    private func cancelPendingRequests() {
+        let pendingContinuations = lock.withLock { () -> [CheckedContinuation<Void, Error>] in
+            isCancelled = true
+            cancellationCount += 1
+            let pending = continuations
+            continuations = []
+            return pending
+        }
+        for continuation in pendingContinuations {
+            continuation.resume(throwing: CancellationError())
+        }
     }
 }
 

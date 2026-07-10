@@ -37,25 +37,15 @@ struct LibraryScanSummaryView: View {
         appModel.filteredLooseAudioPathsInSelectedLibrary(filter: filter, query: debouncedQuery)
     }
 
-    private var stats: AlbumScanResultStats {
-        if let libraryID = appModel.selectedLibraryID,
-           let stats = appModel.scanResultStats(for: libraryID) {
-            return stats
-        }
-        return AlbumScanResultStats(
-            albumCount: result.albums.count,
-            albumsWithCover: result.albumsWithCover,
-            albumsNeedingAttention: result.albumsNeedingAttention,
-            looseAudioCount: result.looseAudioPaths.count
-        )
-    }
-
     var body: some View {
         let visibleAlbums = filteredAlbums
         let visibleLooseAudioPaths = filteredLooseAudioPaths
 
         VStack(alignment: .leading, spacing: 0) {
-            libraryOverviewHeader()
+            libraryOverviewHeader(
+                visibleAlbumCount: visibleAlbums.count,
+                visibleLooseAudioCount: visibleLooseAudioPaths.count
+            )
 
             filteredContent(
                 visibleAlbums: visibleAlbums,
@@ -198,7 +188,21 @@ struct LibraryScanSummaryView: View {
         return LibraryHomeDesignToken.textTertiary
     }
 
-    private func libraryOverviewHeader() -> some View {
+    private var currentPageCountTitle: String {
+        filter == .all ? "专辑数量" : filter.displayName
+    }
+
+    private func currentPageCount(
+        visibleAlbumCount: Int,
+        visibleLooseAudioCount: Int
+    ) -> Int {
+        filter == .looseAudio ? visibleLooseAudioCount : visibleAlbumCount
+    }
+
+    private func libraryOverviewHeader(
+        visibleAlbumCount: Int,
+        visibleLooseAudioCount: Int
+    ) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 20) {
                 VStack(alignment: .leading, spacing: 6) {
@@ -214,54 +218,40 @@ struct LibraryScanSummaryView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .help(selectedLibrary?.rootPath ?? "")
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                VStack(alignment: .trailing, spacing: 6) {
-                    Text("当前动作")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(LibraryHomeDesignToken.textTertiary)
 
                     Text(currentActionDescription)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(currentActionColor)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .help(currentActionDescription)
                 }
-                .frame(width: 220, alignment: .trailing)
-            }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            HStack(spacing: 0) {
-                SummaryStatText(title: "专辑数量", value: stats.albumCount, valueColor: LibraryHomeDesignToken.textPrimary)
-                SummaryStatText(title: "已有封面", value: stats.albumsWithCover, valueColor: LibraryHomeDesignToken.success)
-                SummaryStatText(title: "缺封面", value: stats.albumsMissingCover, valueColor: LibraryHomeDesignToken.destructive)
-                SummaryStatText(title: "需确认", value: stats.albumsNeedingAttention, valueColor: LibraryHomeDesignToken.warning)
-                SummaryStatText(title: "散落音频", value: stats.looseAudioCount, valueColor: LibraryHomeDesignToken.textPrimary)
-            }
+                if let progress = selectedLibraryProgress,
+                   progress.totalAlbums > 0 {
+                    VStack(alignment: .trailing, spacing: 5) {
+                        ScanProgressBar(fraction: progress.fraction)
+                            .frame(width: 240, height: 5)
 
-            if let progress = selectedLibraryProgress,
-               progress.totalAlbums > 0 {
-                VStack(alignment: .leading, spacing: 6) {
-                    ScanProgressBar(fraction: progress.fraction)
-                        .frame(height: 5)
-
-                    HStack(spacing: 8) {
-                        Text(progress.completedDescription)
+                        Text("\(progress.completedAlbums)/\(progress.totalAlbums)")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(LibraryHomeDesignToken.textSecondary)
                             .monospacedDigit()
-
-                        Spacer(minLength: 8)
-
-                        Text(progress.isFinished ? currentActionDescription : progress.actionDescription)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(progress.isFinished ? currentActionColor : LibraryHomeDesignToken.accent)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
                     }
+                    .frame(width: 240, alignment: .trailing)
                 }
             }
+
+            SummaryStatText(
+                title: currentPageCountTitle,
+                value: currentPageCount(
+                    visibleAlbumCount: visibleAlbumCount,
+                    visibleLooseAudioCount: visibleLooseAudioCount
+                ),
+                valueColor: LibraryHomeDesignToken.textPrimary
+            )
+            .frame(maxWidth: 220, alignment: .leading)
         }
         .padding(.horizontal, 20)
         .padding(.top, 18)

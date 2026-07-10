@@ -347,6 +347,15 @@ struct LibraryHomeView: View {
             !isSingleAction
         )
 
+        Button("停止解析") {
+            prepareContextSelection(for: library.id)
+            appModel.stopAlbumNameEnhancement(forLibraryID: library.id)
+        }
+        .disabled(
+            !appModel.isAlbumNameEnhancementRunning(for: library.id) ||
+            !isSingleAction
+        )
+
         Button("重命名") {
             prepareContextSelection(for: library.id)
             beginRename(libraryID: actionIDs.first)

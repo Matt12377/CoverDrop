@@ -49,7 +49,6 @@ final class AppModel: ObservableObject {
     private enum AlbumNameEnhancementQueueSource: Sendable {
         case albumManual
         case libraryManual
-        case automatic
 
         var logDescription: String {
             switch self {
@@ -57,17 +56,15 @@ final class AppModel: ObservableObject {
                 "手动专辑"
             case .libraryManual:
                 "手动音乐库"
-            case .automatic:
-                "自动"
             }
         }
 
-        var hasManualPriority: Bool {
+        var queuePriority: Int {
             switch self {
-            case .albumManual, .libraryManual:
-                true
-            case .automatic:
-                false
+            case .albumManual:
+                2
+            case .libraryManual:
+                1
             }
         }
     }
@@ -77,6 +74,7 @@ final class AppModel: ObservableObject {
         let albumID: AlbumScanRecord.ID
         let source: AlbumNameEnhancementQueueSource
         let allowCoveredAlbums: Bool
+        let batchID: UUID?
     }
 
     private final class ScanSnapshotLoadProgressReporter: @unchecked Sendable {
@@ -118,6 +116,8 @@ final class AppModel: ObservableObject {
     nonisolated(unsafe) private var albumNameEnhancementWorkerTask: Task<Void, Never>?
     private var albumNameEnhancementQueue: [AlbumNameEnhancementQueueItem] = []
     private var runningAlbumNameEnhancementItem: AlbumNameEnhancementQueueItem?
+    private var runningAlbumNameEnhancementRequest: (item: AlbumNameEnhancementQueueItem, task: Task<AlbumNameSuggestion, Error>)?
+    private var activeAlbumNameEnhancementBatchIDs: [LibraryRecord.ID: UUID] = [:]
     private var albumNameEnhancementSnapshotUpdateLibraryIDs: Set<LibraryRecord.ID> = []
     @Published private(set) var pendingCoverURLsByAlbumID: [AlbumScanRecord.ID: URL] = [:]
     @Published private(set) var coverWriteMessagesByAlbumID: [AlbumScanRecord.ID: String] = [:]
@@ -348,7 +348,6 @@ final class AppModel: ObservableObject {
             }.value
             setScanResult(result, for: library.id)
             await saveNewScanSnapshot(for: library, result: result)
-            startAlbumNameEnhancement(for: library, result: result)
             startLibraryChangeMonitoring(for: library)
             if selectedLibraryID == library.id {
                 route = .coverWall(library.id)
@@ -472,7 +471,8 @@ final class AppModel: ObservableObject {
                 libraryID: libraryID,
                 albumID: albumID,
                 source: .albumManual,
-                allowCoveredAlbums: true
+                allowCoveredAlbums: true,
+                batchID: nil
             )
         )
     }
@@ -486,7 +486,9 @@ final class AppModel: ObservableObject {
             errorMessage = "请先扫描或加载这个音乐库。"
             return
         }
-        guard !result.albums.isEmpty else {
+        let missingCoverAlbums = result.albums.filter(Self.isMissingCover)
+        guard !missingCoverAlbums.isEmpty else {
+            activeAlbumNameEnhancementBatchIDs[libraryID] = nil
             albumNameEnhancementProgressByLibraryID[libraryID] = AlbumNameEnhancementProgress(
                 completedAlbums: 0,
                 totalAlbums: 0,
@@ -499,14 +501,17 @@ final class AppModel: ObservableObject {
             return
         }
 
+        let batchID = UUID()
+        activeAlbumNameEnhancementBatchIDs[libraryID] = batchID
         var queuedAlbumCount = 0
-        for album in result.albums {
+        for album in missingCoverAlbums {
             let didEnqueue = enqueueAlbumNameEnhancement(
                 AlbumNameEnhancementQueueItem(
                     libraryID: libraryID,
                     albumID: album.id,
                     source: .libraryManual,
-                    allowCoveredAlbums: true
+                    allowCoveredAlbums: false,
+                    batchID: batchID
                 ),
                 startsWorker: false
             )
@@ -518,8 +523,8 @@ final class AppModel: ObservableObject {
         guard queuedAlbumCount > 0 else {
             if !hasPendingAlbumNameEnhancement(for: libraryID) {
                 albumNameEnhancementProgressByLibraryID[libraryID] = AlbumNameEnhancementProgress(
-                    completedAlbums: result.albums.count,
-                    totalAlbums: result.albums.count,
+                    completedAlbums: missingCoverAlbums.count,
+                    totalAlbums: missingCoverAlbums.count,
                     currentAlbumName: nil
                 )
                 albumNameEnhancementStatusByLibraryID[libraryID] = AlbumNameEnhancementStatus(
@@ -540,6 +545,41 @@ final class AppModel: ObservableObject {
             lastErrorMessage: nil
         )
         startAlbumNameEnhancementWorkerIfNeeded()
+    }
+
+    func stopAlbumNameEnhancement(forLibraryID libraryID: LibraryRecord.ID) {
+        guard isAlbumNameEnhancementRunning(for: libraryID) else { return }
+
+        CoverDropDebugLog.write("Ollama 名称增强：用户停止批处理，libraryID=\(libraryID)")
+        activeAlbumNameEnhancementBatchIDs[libraryID] = nil
+        let queuedAlbumIDs = albumNameEnhancementQueue
+            .filter { $0.libraryID == libraryID }
+            .map(\.albumID)
+        albumNameEnhancementQueue.removeAll { $0.libraryID == libraryID }
+        for albumID in queuedAlbumIDs {
+            albumNameEnhancementStateByAlbumID[albumID] = nil
+        }
+
+        if runningAlbumNameEnhancementItem?.libraryID == libraryID {
+            runningAlbumNameEnhancementRequest?.task.cancel()
+            if let runningAlbumID = runningAlbumNameEnhancementItem?.albumID {
+                albumNameEnhancementStateByAlbumID[runningAlbumID] = nil
+            }
+            runningAlbumNameEnhancementItem = nil
+        }
+
+        if let progress = albumNameEnhancementProgressByLibraryID[libraryID] {
+            albumNameEnhancementProgressByLibraryID[libraryID] = AlbumNameEnhancementProgress(
+                completedAlbums: progress.completedAlbums,
+                totalAlbums: progress.totalAlbums,
+                currentAlbumName: nil
+            )
+        }
+        albumNameEnhancementStatusByLibraryID[libraryID] = AlbumNameEnhancementStatus(
+            isRunning: false,
+            lastErrorMessage: nil
+        )
+        rebuildScanDisplayIndex(for: libraryID)
     }
 
     func latestScanSnapshot(for libraryID: LibraryRecord.ID) -> ScanSnapshotSummary? {
@@ -1205,40 +1245,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func startAlbumNameEnhancement(
-        for library: LibraryRecord,
-        result: LibraryScanResult,
-        albumIDsNeedingEnhancement: Set<AlbumScanRecord.ID>? = nil
-    ) {
-        guard environment.configuration.localLLM.isEnabled else { return }
-
-        let targetAlbums = albumNameEnhancementTargetAlbums(
-            in: result,
-            albumIDsNeedingEnhancement: albumIDsNeedingEnhancement
-        )
-        guard !targetAlbums.isEmpty else {
-            CoverDropDebugLog.write("Ollama 名称增强：没有缺封面且需要处理的专辑，跳过批处理，音乐库=\(library.displayName)")
-            releaseAlbumNameSuggestingResourcesIfNeeded()
-            return
-        }
-
-        let targetDescription = albumIDsNeedingEnhancement.map { "变化候选=\($0.count)" } ?? "全量候选"
-        CoverDropDebugLog.write(
-            "Ollama 名称增强：开始批处理，音乐库=\(library.displayName)，路径=\(library.rootPath)，专辑数=\(result.albums.count)，\(targetDescription)，实际处理缺封面=\(targetAlbums.count)，模型=\(environment.configuration.localLLM.model)，baseURL=\(environment.configuration.localLLM.baseURL)，超时=\(Int(environment.configuration.localLLM.requestTimeoutSeconds))秒，最多曲目=\(environment.configuration.localLLM.maxTracksPerAlbum)"
-        )
-
-        for album in targetAlbums {
-            enqueueAlbumNameEnhancement(
-                AlbumNameEnhancementQueueItem(
-                    libraryID: library.id,
-                    albumID: album.id,
-                    source: .automatic,
-                    allowCoveredAlbums: false
-                )
-            )
-        }
-    }
-
     @MainActor
     private func runAlbumNameEnhancementQueue() async {
         defer {
@@ -1272,8 +1278,9 @@ final class AppModel: ObservableObject {
 
     private func processAlbumNameEnhancement(_ item: AlbumNameEnhancementQueueItem) async {
         let countsLibraryProgress = item.source == .libraryManual
+        var shouldCompleteLibraryProgress = true
         defer {
-            if countsLibraryProgress {
+            if countsLibraryProgress, shouldCompleteLibraryProgress {
                 completeAlbumNameEnhancementProgressItem(for: item.libraryID)
             }
         }
@@ -1316,7 +1323,21 @@ final class AppModel: ObservableObject {
         )
 
         do {
-            let suggestion = try await environment.albumNameSuggesting.suggestAlbumName(for: input)
+            let requestTask = Task { [albumNameSuggesting = environment.albumNameSuggesting] in
+                try await albumNameSuggesting.suggestAlbumName(for: input)
+            }
+            runningAlbumNameEnhancementRequest = (item, requestTask)
+            defer {
+                if runningAlbumNameEnhancementRequest?.item.albumID == item.albumID {
+                    runningAlbumNameEnhancementRequest = nil
+                }
+            }
+            let suggestion = try await requestTask.value
+            guard item.source != .libraryManual || activeAlbumNameEnhancementBatchIDs[item.libraryID] == item.batchID else {
+                albumNameEnhancementStateByAlbumID[item.albumID] = nil
+                shouldCompleteLibraryProgress = false
+                return
+            }
             guard scanResultsByLibraryID[item.libraryID]?.albums.contains(where: { $0.id == item.albumID }) == true else {
                 CoverDropDebugLog.write("Ollama 名称增强：目标专辑已移除，丢弃返回结果，albumID=\(item.albumID)")
                 clearTransientState(forAlbumID: item.albumID, inLibraryID: item.libraryID)
@@ -1340,6 +1361,8 @@ final class AppModel: ObservableObject {
             )
             albumNameEnhancementSnapshotUpdateLibraryIDs.insert(item.libraryID)
         } catch is CancellationError {
+            shouldCompleteLibraryProgress = false
+            albumNameEnhancementStateByAlbumID[item.albumID] = nil
             CoverDropDebugLog.write("Ollama 名称增强：任务收到取消，专辑=\(album.albumName)")
         } catch {
             guard scanResultsByLibraryID[item.libraryID]?.albums.contains(where: { $0.id == item.albumID }) == true else {
@@ -1433,8 +1456,13 @@ final class AppModel: ObservableObject {
 
     private func dequeueAlbumNameEnhancementItem() -> AlbumNameEnhancementQueueItem? {
         guard !albumNameEnhancementQueue.isEmpty else { return nil }
-        if let manualIndex = albumNameEnhancementQueue.firstIndex(where: { $0.source.hasManualPriority }) {
-            return albumNameEnhancementQueue.remove(at: manualIndex)
+        let highestPriority = albumNameEnhancementQueue
+            .map { $0.source.queuePriority }
+            .max() ?? 0
+        if let priorityIndex = albumNameEnhancementQueue.firstIndex(where: {
+            $0.source.queuePriority == highestPriority
+        }) {
+            return albumNameEnhancementQueue.remove(at: priorityIndex)
         }
         return albumNameEnhancementQueue.removeFirst()
     }
@@ -1452,17 +1480,6 @@ final class AppModel: ObservableObject {
             || albumNameEnhancementQueue.contains { $0.libraryID == libraryID }
     }
 
-    private func albumNameEnhancementTargetAlbums(
-        in result: LibraryScanResult,
-        albumIDsNeedingEnhancement: Set<AlbumScanRecord.ID>?
-    ) -> [AlbumScanRecord] {
-        let targetAlbums = albumIDsNeedingEnhancement.map { targetIDs in
-            result.albums.filter { targetIDs.contains($0.id) }
-        } ?? result.albums
-
-        return targetAlbums.filter(Self.isMissingCover)
-    }
-
     nonisolated private static func isMissingCover(_ album: AlbumScanRecord) -> Bool {
         switch album.displayedCover {
         case .none:
@@ -1472,15 +1489,12 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func missingCoverAlbumIDs(in result: LibraryScanResult) -> Set<AlbumScanRecord.ID> {
-        Set(result.albums.filter(Self.isMissingCover).map(\.id))
-    }
-
     private func cancelAlbumNameEnhancement(
         for libraryID: LibraryRecord.ID,
         clearsSuggestions: Bool = true
     ) {
         CoverDropDebugLog.write("Ollama 名称增强：取消批处理，libraryID=\(libraryID)")
+        activeAlbumNameEnhancementBatchIDs[libraryID] = nil
         albumNameEnhancementSnapshotUpdateLibraryIDs.remove(libraryID)
         let queuedAlbumIDs = albumNameEnhancementQueue
             .filter { $0.libraryID == libraryID }
@@ -1492,6 +1506,7 @@ final class AppModel: ObservableObject {
         if clearsSuggestions,
            let runningAlbumNameEnhancementItem,
            runningAlbumNameEnhancementItem.libraryID == libraryID {
+            runningAlbumNameEnhancementRequest?.task.cancel()
             albumNameEnhancementStateByAlbumID[runningAlbumNameEnhancementItem.albumID] = nil
         }
         if clearsSuggestions || !hasPendingAlbumNameEnhancement(for: libraryID) {
@@ -1793,11 +1808,6 @@ final class AppModel: ObservableObject {
                 previousResult: previousResult,
                 refreshedResult: result
             )
-            let albumIDsNeedingEnhancement = albumIDsNeedingNameEnhancement(
-                for: library,
-                previousResult: previousResult,
-                refreshedResult: result
-            )
             cancelAlbumNameEnhancement(for: library.id, clearsSuggestions: false)
             albumNameSuggestionsByLibraryID[library.id] = retainedSuggestions
             setScanResult(
@@ -1810,12 +1820,7 @@ final class AppModel: ObservableObject {
             let elapsedText = Self.formatDuration(since: startedAt)
             realtimeRefreshMessagesByLibraryID[library.id] = "已局部刷新：\(refreshedAlbums.count) 张专辑。"
             CoverDropDebugLog.write(
-                "实时刷新：局部专辑刷新成功，音乐库=\(library.displayName)，耗时=\(elapsedText)，专辑数=\(refreshedAlbums.count)，并发上限=\(environment.configuration.scan.maxConcurrentAlbums)，需重新增强=\(albumIDsNeedingEnhancement.count)"
-            )
-            startAlbumNameEnhancement(
-                for: library,
-                result: result,
-                albumIDsNeedingEnhancement: albumIDsNeedingEnhancement
+                "实时刷新：局部专辑刷新成功，音乐库=\(library.displayName)，耗时=\(elapsedText)，专辑数=\(refreshedAlbums.count)，并发上限=\(environment.configuration.scan.maxConcurrentAlbums)"
             )
         } catch {
             let elapsedText = Self.formatDuration(since: startedAt)
@@ -2073,38 +2078,6 @@ final class AppModel: ObservableObject {
             }
             retained[album.id] = suggestion
         }
-    }
-
-    private func albumIDsNeedingNameEnhancement(
-        for library: LibraryRecord,
-        previousResult: LibraryScanResult?,
-        refreshedResult: LibraryScanResult
-    ) -> Set<AlbumScanRecord.ID> {
-        guard environment.configuration.localLLM.isEnabled else { return [] }
-        guard let previousResult else {
-            return Set(refreshedResult.albums.map(\.id))
-        }
-
-        let previousAlbumsByID = Dictionary(uniqueKeysWithValues: previousResult.albums.map { ($0.id, $0) })
-        return Set(refreshedResult.albums.compactMap { album in
-            guard Self.isMissingCover(album) else {
-                return nil
-            }
-
-            guard let previousAlbum = previousAlbumsByID[album.id] else {
-                return album.id
-            }
-
-            if !Self.isMissingCover(previousAlbum) {
-                return album.id
-            }
-
-            if albumNameEnhancementFingerprint(for: previousAlbum) != albumNameEnhancementFingerprint(for: album) {
-                return album.id
-            }
-
-            return nil
-        })
     }
 
     private func albumNameEnhancementFingerprint(
