@@ -180,6 +180,16 @@ final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Se
         )
         """)
         try execute(db, """
+        CREATE TABLE IF NOT EXISTS album_cue_sheets (
+            album_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            path TEXT NOT NULL,
+            relative_path TEXT NOT NULL,
+            PRIMARY KEY (album_id, ordinal),
+            FOREIGN KEY (album_id) REFERENCES albums(id) ON DELETE CASCADE
+        )
+        """)
+        try execute(db, """
         CREATE TABLE IF NOT EXISTS album_issues (
             album_id TEXT NOT NULL,
             ordinal INTEGER NOT NULL,
@@ -212,6 +222,7 @@ final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Se
         try execute(db, "DELETE FROM album_name_status")
         try execute(db, "DELETE FROM album_name_suggestions")
         try execute(db, "DELETE FROM album_issues")
+        try execute(db, "DELETE FROM album_cue_sheets")
         try execute(db, "DELETE FROM audio_files")
         try execute(db, "DELETE FROM albums")
         try execute(db, "DELETE FROM snapshots")
@@ -242,6 +253,9 @@ final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Se
             try insertAlbum(album, ordinal: albumIndex, db: db)
             for (audioIndex, audioFile) in album.audioFiles.enumerated() {
                 try insertAudioFile(audioFile, albumID: album.folderPath, ordinal: audioIndex, db: db)
+            }
+            for (cueSheetIndex, cueSheet) in album.cueSheets.enumerated() {
+                try insertCueSheet(cueSheet, albumID: album.folderPath, ordinal: cueSheetIndex, db: db)
             }
             for (issueIndex, issue) in album.issues.enumerated() {
                 try insertIssue(issue, albumID: album.folderPath, ordinal: issueIndex, db: db)
@@ -314,6 +328,28 @@ final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Se
             bindIntOrNull(audioFile.metadata?.durationSeconds, to: statement, at: 12)
             bindTextOrNull(audioFile.metadata?.embeddedArtworkPath, to: statement, at: 13)
             bindTextOrNull(audioFile.readError, to: statement, at: 14)
+            try stepDone(statement, db: db)
+        }
+    }
+
+    private func insertCueSheet(
+        _ cueSheet: ScanSnapshot.CueSheet,
+        albumID: String,
+        ordinal: Int,
+        db: OpaquePointer
+    ) throws {
+        try withStatement(
+            db,
+            """
+            INSERT INTO album_cue_sheets (
+                album_id, ordinal, path, relative_path
+            ) VALUES (?, ?, ?, ?)
+            """
+        ) { statement in
+            bindText(albumID, to: statement, at: 1)
+            bindInt(ordinal, to: statement, at: 2)
+            bindText(cueSheet.path, to: statement, at: 3)
+            bindText(cueSheet.relativePath, to: statement, at: 4)
             try stepDone(statement, db: db)
         }
     }
@@ -453,7 +489,7 @@ final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Se
             }
 
             let schemaVersion = sqlite3_column_int(statement, 0)
-            guard schemaVersion == ScanSnapshot.currentSchemaVersion else {
+            guard FileScanSnapshotStore.isSupportedSchemaVersion(Int(schemaVersion)) else {
                 throw SQLiteScanSnapshotStoreError.unsupportedSchemaVersion(
                     actual: Int(schemaVersion),
                     supported: ScanSnapshot.currentSchemaVersion
@@ -544,6 +580,7 @@ final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Se
                     artistName: columnText(statement, 2) ?? "",
                     albumName: columnText(statement, 3) ?? "",
                     audioFiles: try loadAudioFiles(albumID: albumID, db: db),
+                    cueSheets: try loadCueSheets(albumID: albumID, db: db),
                     displayedCover: cover,
                     issues: try loadIssues(albumID: albumID, db: db)
                 ))
@@ -589,6 +626,27 @@ final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Se
                 ))
             }
             return audioFiles
+        }
+    }
+
+    private func loadCueSheets(albumID: String, db: OpaquePointer) throws -> [ScanSnapshot.CueSheet] {
+        guard tableExists("album_cue_sheets", db: db) else { return [] }
+        return try withStatement(
+            db,
+            """
+            SELECT path, relative_path
+            FROM album_cue_sheets WHERE album_id = ? ORDER BY ordinal
+            """
+        ) { statement in
+            bindText(albumID, to: statement, at: 1)
+            var cueSheets: [ScanSnapshot.CueSheet] = []
+            while sqlite3_step(statement) == SQLITE_ROW {
+                cueSheets.append(ScanSnapshot.CueSheet(
+                    path: columnText(statement, 0) ?? "",
+                    relativePath: columnText(statement, 1) ?? ""
+                ))
+            }
+            return cueSheets
         }
     }
 
@@ -651,7 +709,7 @@ final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Se
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let snapshot = try decoder.decode(ScanSnapshot.self, from: Data(contentsOf: fileURL))
-        guard snapshot.schemaVersion == ScanSnapshot.currentSchemaVersion else {
+        guard FileScanSnapshotStore.isSupportedSchemaVersion(snapshot.schemaVersion) else {
             throw SQLiteScanSnapshotStoreError.unsupportedSchemaVersion(
                 actual: snapshot.schemaVersion,
                 supported: ScanSnapshot.currentSchemaVersion

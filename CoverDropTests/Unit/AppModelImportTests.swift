@@ -86,6 +86,46 @@ struct AppModelImportTests {
         #expect(appModel.shouldShowCoverWallForSelectedLibrary)
     }
 
+    @Test("五万张专辑下 AppModel 公开读取方法保持交互预算")
+    func indexedPublicReadsStayUnderInteractionBudgetForLargeLibrary() async {
+        let root = URL(fileURLWithPath: "/tmp/coverdrop-large-library", isDirectory: true)
+        let albums = (0..<50_000).map { index in
+            performanceAlbum(index: index, hasCover: index.isMultiple(of: 2))
+        }
+        let store = MemoryLibraryStore()
+        let environment = AppEnvironment(
+            configuration: AppConfiguration(localLLM: AppConfiguration.LocalLLM(isEnabled: false)),
+            libraryStore: store,
+            folderAccess: StubFolderAccess(),
+            roleProber: StubRoleProber(role: .library),
+            libraryScanner: StubLibraryScanner(result: LibraryScanResult(albums: albums, looseAudioPaths: [])),
+            coverImageWriter: StubCoverImageWriter()
+        )
+        let appModel = AppModel(environment: environment)
+        await appModel.prepareImport(url: root)
+        await appModel.confirmImport(role: .library)
+        await appModel.scanSelectedLibrary()
+        let lastAlbumID = albums[49_999].id
+
+        let lookup = measured {
+            #expect(appModel.albumInSelectedLibrary(id: lastAlbumID)?.albumName == "专辑 49999")
+        }
+        let stats = measured {
+            #expect(appModel.scanResultStats(for: appModel.selectedLibraryID!)?.albumsWithCover == 25_000)
+        }
+        let filter = measured {
+            #expect(appModel.filteredAlbumsInSelectedLibrary(filter: .withCover, query: "").count == 25_000)
+        }
+        let noHitSearch = measured {
+            #expect(appModel.filteredAlbumsInSelectedLibrary(filter: .all, query: "不会命中的搜索词").isEmpty)
+        }
+
+        #expect(lookup < 0.1, "AppModel albumID 查找耗时 \(lookup) 秒")
+        #expect(stats < 0.1, "AppModel 统计读取耗时 \(stats) 秒")
+        #expect(filter < 0.1, "AppModel 筛选耗时 \(filter) 秒")
+        #expect(noHitSearch < 0.1, "AppModel 无命中搜索耗时 \(noHitSearch) 秒")
+    }
+
     @Test("扫描器从 AppModel 启动时不占用主线程")
     func scanRunsScannerAwayFromMainThread() async {
         let store = MemoryLibraryStore()
@@ -624,8 +664,10 @@ struct AppModelImportTests {
             #expect(appModel.displayArtistName(for: album) == "Artist")
             #expect(appModel.displayAlbumName(for: album) == "原始专辑")
             #expect(appModel.hasEnhancedAlbumName(for: album) == false)
-            #expect(appModel.errorMessage?.contains("回退原始名称") == true)
+            #expect(appModel.errorMessage == nil)
             #expect(appModel.albumNameEnhancementStatus(for: libraryID)?.lastErrorMessage != nil)
+            #expect(appModel.albumNameEnhancementFailedAlbumIDs(for: libraryID) == [album.id])
+            #expect(appModel.albumNameEnhancementFailureSummary(for: libraryID) == "Ollama 解析完成，1 张专辑解析失败，已回退原始名称")
         }
     }
 
@@ -687,6 +729,149 @@ struct AppModelImportTests {
             await waitUntil { suggester.releaseCount() == 1 }
 
             #expect(suggester.releaseCount() == 1)
+        }
+    }
+
+    @Test("名称增强完成后不等待慢快照写入")
+    func enhancementCompletionDoesNotWaitForSlowSnapshotWrite() async throws {
+        try await withTemporaryDirectory { root in
+            let album = makeAlbum(
+                folderURL: root.appendingPathComponent("Artist/Missing", isDirectory: true),
+                albumName: "Missing"
+            )
+            let snapshotStore = DelayingScanSnapshotStore(replaceDelaySeconds: 0.5)
+            let suggester = BlockingReleasingAlbumNameSuggesting()
+            let appModel = await makeScannedAppModel(
+                root: root,
+                albums: [album],
+                albumNameSuggesting: suggester,
+                snapshotStore: snapshotStore
+            )
+
+            let libraryID = try #require(appModel.selectedLibraryID)
+            #expect(appModel.activeScanSnapshot(for: libraryID) != nil)
+            await waitUntil { await suggester.albumNames() == ["Missing"] }
+
+            let startedAt = Date()
+            await suggester.releaseNext()
+            await waitUntil { suggester.releaseCount() == 1 }
+
+            #expect(Date().timeIntervalSince(startedAt) < 0.25)
+            await waitUntil { snapshotStore.replaceCallCount() > 0 }
+            #expect(snapshotStore.replaceCallCount() > 0)
+        }
+    }
+
+    @Test("在 Finder 中显示专辑通过专用打开服务")
+    func openingAlbumInFinderUsesDedicatedOpener() async throws {
+        try await withTemporaryDirectory { root in
+            let album = makeAlbum(
+                folderURL: root.appendingPathComponent("Artist/Album", isDirectory: true),
+                albumName: "Album"
+            )
+            let opener = RecordingAlbumFolderOpener()
+            let appModel = await makeScannedAppModel(
+                root: root,
+                albums: [album],
+                albumFolderOpener: opener
+            )
+
+            await appModel.openAlbumFolderInFinder(albumID: album.id)
+
+            #expect(await opener.openedURLs == [album.folderURL.standardizedFileURL])
+            #expect(appModel.albumFolderOpenMessage(forAlbumID: album.id) == nil)
+            #expect(!appModel.isOpeningAlbumFolder(album.id))
+        }
+    }
+
+    @Test("用 XLD 分轨会通过专用服务打开选中的 CUE")
+    func splittingCueSheetUsesDedicatedSplitter() async throws {
+        try await withTemporaryDirectory { root in
+            let albumFolder = root.appendingPathComponent("Artist/Album", isDirectory: true)
+            try FileManager.default.createDirectory(at: albumFolder, withIntermediateDirectories: true)
+            let cueURL = albumFolder.appendingPathComponent("album.cue")
+            try Data("FILE \"album.ape\" WAVE".utf8).write(to: cueURL)
+            let album = makeAlbum(
+                folderURL: albumFolder,
+                albumName: "Album",
+                audioRelativePaths: ["album.ape"],
+                cueRelativePaths: ["album.cue"],
+                issues: [.singleFileNeedsConfirmation(hasCue: true)]
+            )
+            let splitter = RecordingCueSheetSplitter()
+            let appModel = await makeScannedAppModel(
+                root: root,
+                albums: [album],
+                cueSheetSplitter: splitter
+            )
+            let cueSheetID = try #require(album.cueSheets.first?.id)
+
+            await appModel.splitCueSheetWithXLD(albumID: album.id, cueSheetID: cueSheetID)
+
+            #expect(await splitter.openedURLs == [cueURL.standardizedFileURL])
+            #expect(appModel.cueSheetSplitMessage(forAlbumID: album.id)?.contains("已在 XLD 中打开") == true)
+            #expect(!appModel.isSplittingCueSheet(album.id))
+        }
+    }
+
+    @Test("CUE 文件消失时不启动 XLD 并显示错误")
+    func splittingMissingCueSheetShowsError() async throws {
+        try await withTemporaryDirectory { root in
+            let albumFolder = root.appendingPathComponent("Artist/Album", isDirectory: true)
+            try FileManager.default.createDirectory(at: albumFolder, withIntermediateDirectories: true)
+            let album = makeAlbum(
+                folderURL: albumFolder,
+                albumName: "Album",
+                audioRelativePaths: ["album.ape"],
+                cueRelativePaths: ["album.cue"],
+                issues: [.singleFileNeedsConfirmation(hasCue: true)]
+            )
+            let splitter = RecordingCueSheetSplitter()
+            let appModel = await makeScannedAppModel(
+                root: root,
+                albums: [album],
+                cueSheetSplitter: splitter
+            )
+            let cueSheetID = try #require(album.cueSheets.first?.id)
+
+            await appModel.splitCueSheetWithXLD(albumID: album.id, cueSheetID: cueSheetID)
+
+            #expect(await splitter.openedURLs.isEmpty)
+            #expect(appModel.cueSheetSplitMessage(forAlbumID: album.id)?.contains("未找到 CUE 文件") == true)
+        }
+    }
+
+    @Test("重复点击分轨时只启动一次 XLD")
+    func splittingCueSheetIgnoresDuplicateRequestWhileRunning() async throws {
+        try await withTemporaryDirectory { root in
+            let albumFolder = root.appendingPathComponent("Artist/Album", isDirectory: true)
+            try FileManager.default.createDirectory(at: albumFolder, withIntermediateDirectories: true)
+            let cueURL = albumFolder.appendingPathComponent("album.cue")
+            try Data("FILE \"album.ape\" WAVE".utf8).write(to: cueURL)
+            let album = makeAlbum(
+                folderURL: albumFolder,
+                albumName: "Album",
+                audioRelativePaths: ["album.ape"],
+                cueRelativePaths: ["album.cue"],
+                issues: [.singleFileNeedsConfirmation(hasCue: true)]
+            )
+            let splitter = BlockingCueSheetSplitter()
+            let appModel = await makeScannedAppModel(
+                root: root,
+                albums: [album],
+                cueSheetSplitter: splitter
+            )
+            let cueSheetID = try #require(album.cueSheets.first?.id)
+
+            let firstRequest = Task {
+                await appModel.splitCueSheetWithXLD(albumID: album.id, cueSheetID: cueSheetID)
+            }
+            await waitUntil { appModel.isSplittingCueSheet(album.id) }
+            await appModel.splitCueSheetWithXLD(albumID: album.id, cueSheetID: cueSheetID)
+            await splitter.release()
+            await firstRequest.value
+
+            #expect(await splitter.openedURLs == [cueURL.standardizedFileURL])
         }
     }
 
@@ -811,12 +996,97 @@ struct AppModelImportTests {
             }
 
             let state = try #require(appModel.albumNameEnhancementState(forAlbumID: album.id))
+            let libraryID = try #require(appModel.selectedLibraryID)
             #expect(appModel.displayAlbumName(for: album) == "Covered")
             #expect(appModel.hasEnhancedAlbumName(for: album) == false)
             #expect(state.isQueued == false)
             #expect(state.isRunning == false)
             #expect(state.lastErrorMessage?.contains("Ollama 请求失败") == true)
-            #expect(appModel.errorMessage?.contains("本地 Ollama 专辑名称增强失败") == true)
+            #expect(appModel.errorMessage == nil)
+            #expect(appModel.albumNameEnhancementFailedAlbumIDs(for: libraryID) == [album.id])
+            #expect(appModel.albumNameEnhancementFailureSummary(for: libraryID) == "Ollama 解析完成，1 张专辑解析失败，已回退原始名称")
+        }
+    }
+
+    @Test("音乐库智能解析会处理已有封面的专辑")
+    func libraryEnhancementHandlesCoveredAlbums() async throws {
+        try await withTemporaryDirectory { root in
+            let covered = makeAlbum(
+                folderURL: root.appendingPathComponent("Artist/Covered", isDirectory: true),
+                albumName: "Covered",
+                hasCover: true
+            )
+            let missing = makeAlbum(
+                folderURL: root.appendingPathComponent("Artist/Missing", isDirectory: true),
+                albumName: "Missing"
+            )
+            let recorder = AlbumNameSuggestionRecorder()
+            let appModel = await makeScannedAppModel(
+                root: root,
+                albums: [covered, missing],
+                albumNameSuggesting: RecordingAlbumNameSuggesting(recorder: recorder)
+            )
+
+            let libraryID = try #require(appModel.selectedLibraryID)
+            await waitForAlbumNameEnhancement(toFinishIn: appModel, libraryID: libraryID)
+            await recorder.reset()
+
+            appModel.requestAlbumNameEnhancement(forLibraryID: libraryID)
+            await waitForAlbumNameEnhancement(toFinishIn: appModel, libraryID: libraryID)
+
+            #expect(await recorder.albumNames() == ["Covered", "Missing"])
+            #expect(appModel.albumNameEnhancementProgress(for: libraryID)?.isFinished == true)
+        }
+    }
+
+    @Test("音乐库智能解析运行时提供进度")
+    func libraryEnhancementReportsProgress() async throws {
+        try await withTemporaryDirectory { root in
+            let first = makeAlbum(
+                folderURL: root.appendingPathComponent("Artist/First", isDirectory: true),
+                albumName: "First",
+                hasCover: true
+            )
+            let second = makeAlbum(
+                folderURL: root.appendingPathComponent("Artist/Second", isDirectory: true),
+                albumName: "Second",
+                hasCover: true
+            )
+            let suggester = BlockingRecordingAlbumNameSuggesting()
+            let appModel = await makeScannedAppModel(
+                root: root,
+                albums: [first, second],
+                albumNameSuggesting: suggester
+            )
+            let libraryID = try #require(appModel.selectedLibraryID)
+
+            appModel.requestAlbumNameEnhancement(forLibraryID: libraryID)
+            await waitUntil { await suggester.albumNames() == ["First"] }
+
+            let runningProgress = try #require(appModel.albumNameEnhancementProgress(for: libraryID))
+            #expect(runningProgress.completedAlbums == 0)
+            #expect(runningProgress.totalAlbums == 2)
+            #expect(runningProgress.currentAlbumName == "First")
+            #expect(runningProgress.fraction == 0)
+            #expect(runningProgress.actionDescription == "正在智能解析 First")
+
+            await suggester.releaseNext()
+            await waitUntil { await suggester.albumNames() == ["First", "Second"] }
+
+            let halfwayProgress = try #require(appModel.albumNameEnhancementProgress(for: libraryID))
+            #expect(halfwayProgress.completedAlbums == 1)
+            #expect(halfwayProgress.totalAlbums == 2)
+            #expect(halfwayProgress.currentAlbumName == "Second")
+            #expect(halfwayProgress.fraction == 0.5)
+
+            await suggester.releaseNext()
+            await waitForAlbumNameEnhancement(toFinishIn: appModel, libraryID: libraryID)
+
+            let finishedProgress = try #require(appModel.albumNameEnhancementProgress(for: libraryID))
+            #expect(finishedProgress.completedAlbums == 2)
+            #expect(finishedProgress.totalAlbums == 2)
+            #expect(finishedProgress.isFinished)
+            #expect(finishedProgress.actionDescription == "智能解析完成")
         }
     }
 
@@ -1555,6 +1825,55 @@ private final class BlockingRecordingAlbumNameSuggesting: AlbumNameSuggesting, @
     }
 }
 
+private final class BlockingReleasingAlbumNameSuggesting: AlbumNameSuggestingResourceReleasing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var processedAlbumNames: [String] = []
+    private var continuations: [CheckedContinuation<Void, Never>] = []
+    private var releases = 0
+
+    func suggestAlbumName(for input: AlbumNameEnhancementInput) async throws -> AlbumNameSuggestion {
+        let originalArtistName = input.originalArtistName
+        let originalAlbumName = input.originalAlbumName
+        lock.withLock {
+            processedAlbumNames.append(originalAlbumName)
+        }
+        await withCheckedContinuation { continuation in
+            lock.withLock {
+                continuations.append(continuation)
+            }
+        }
+        return AlbumNameSuggestion(
+            artistName: originalArtistName,
+            albumName: "\(originalAlbumName) Enhanced"
+        )
+    }
+
+    func releaseResources() async {
+        lock.withLock {
+            releases += 1
+        }
+    }
+
+    func albumNames() -> [String] {
+        lock.withLock {
+            processedAlbumNames
+        }
+    }
+
+    func releaseNext() {
+        let continuation = lock.withLock {
+            continuations.isEmpty ? nil : continuations.removeFirst()
+        }
+        continuation?.resume()
+    }
+
+    func releaseCount() -> Int {
+        lock.withLock {
+            releases
+        }
+    }
+}
+
 private final class ReleasingAlbumNameSuggesting: AlbumNameSuggestingResourceReleasing, @unchecked Sendable {
     private let lock = NSLock()
     private var releases = 0
@@ -1576,6 +1895,116 @@ private final class ReleasingAlbumNameSuggesting: AlbumNameSuggestingResourceRel
         lock.withLock {
             releases
         }
+    }
+}
+
+private final class DelayingScanSnapshotStore: ScanSnapshotStoring, @unchecked Sendable {
+    private let lock = NSLock()
+    private let replaceDelaySeconds: TimeInterval
+    private var replaceCount = 0
+
+    init(replaceDelaySeconds: TimeInterval = 0) {
+        self.replaceDelaySeconds = replaceDelaySeconds
+    }
+
+    func saveNewSnapshot(_ snapshot: ScanSnapshot) async throws -> ScanSnapshotSummary {
+        makeSummary(for: snapshot)
+    }
+
+    func replaceSnapshot(_ snapshot: ScanSnapshot, at fileURL: URL) async throws -> ScanSnapshotSummary {
+        if replaceDelaySeconds > 0 {
+            let deadline = Date().addingTimeInterval(replaceDelaySeconds)
+            while Date() < deadline {
+                _ = 1 + 1
+            }
+        }
+        lock.withLock {
+            replaceCount += 1
+        }
+        return makeSummary(for: snapshot, fileURL: fileURL)
+    }
+
+    func latestSnapshot(for library: LibraryRecord) async throws -> ScanSnapshotSummary? {
+        nil
+    }
+
+    func loadSnapshot(at fileURL: URL, expectedLibrary: LibraryRecord) async throws -> ScanSnapshot {
+        throw DelayingScanSnapshotStoreError()
+    }
+
+    func replaceCallCount() -> Int {
+        lock.withLock {
+            replaceCount
+        }
+    }
+
+    private func makeSummary(
+        for snapshot: ScanSnapshot,
+        fileURL: URL = URL(fileURLWithPath: "/tmp/coverdrop-test-snapshot.db")
+    ) -> ScanSnapshotSummary {
+        ScanSnapshotSummary(
+            fileURL: fileURL,
+            schemaVersion: ScanSnapshot.currentSchemaVersion,
+            createdAt: .now,
+            libraryDisplayName: "测试音乐库",
+            libraryRootPath: "/tmp/coverdrop-test-library",
+            libraryRole: .library,
+            albumCount: 0
+        )
+    }
+}
+
+private struct DelayingScanSnapshotStoreError: LocalizedError, Sendable {
+    var errorDescription: String? {
+        "测试快照存储不支持读取。"
+    }
+}
+
+private actor RecordingAlbumFolderOpener: AlbumFolderOpening {
+    private(set) var openedURLs: [URL] = []
+
+    nonisolated func openAlbumFolder(_ folderURL: URL) async throws {
+        await record(folderURL)
+    }
+
+    private func record(_ folderURL: URL) {
+        openedURLs.append(folderURL)
+    }
+}
+
+private actor RecordingCueSheetSplitter: CueSheetSplitting {
+    private(set) var openedURLs: [URL] = []
+
+    nonisolated func splitCueSheet(_ cueSheetURL: URL) async throws {
+        await record(cueSheetURL)
+    }
+
+    private func record(_ cueSheetURL: URL) {
+        openedURLs.append(cueSheetURL.standardizedFileURL)
+    }
+}
+
+private actor BlockingCueSheetSplitter: CueSheetSplitting {
+    private(set) var openedURLs: [URL] = []
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var isReleased = false
+
+    nonisolated func splitCueSheet(_ cueSheetURL: URL) async throws {
+        await recordAndWait(cueSheetURL)
+    }
+
+    private func recordAndWait(_ cueSheetURL: URL) async {
+        openedURLs.append(cueSheetURL.standardizedFileURL)
+        guard !isReleased else { return }
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func release() {
+        isReleased = true
+        continuation?.resume()
+        continuation = nil
     }
 }
 
@@ -1963,12 +2392,38 @@ private actor ScanGate {
     }
 }
 
+private func measured(_ block: () -> Void) -> TimeInterval {
+    let startedAt = Date()
+    block()
+    return Date().timeIntervalSince(startedAt)
+}
+
+private func performanceAlbum(index: Int, hasCover: Bool) -> AlbumScanRecord {
+    let folderURL = URL(fileURLWithPath: "/tmp/歌手 \(index % 500)/专辑 \(index)", isDirectory: true)
+    return AlbumScanRecord(
+        folderURL: folderURL,
+        artistName: "歌手 \(index % 500)",
+        albumName: "专辑 \(index)",
+        audioFiles: [],
+        displayedCover: hasCover ? CoverCandidate(
+            url: folderURL.appendingPathComponent("cover.jpg"),
+            relativePath: "cover.jpg",
+            namePriority: 0,
+            depth: 0
+        ) : nil,
+        issues: []
+    )
+}
+
 @MainActor
 private func makeScannedAppModel(
     root: URL,
     albums: [AlbumScanRecord],
     coverImageWriter: any CoverImageWriting = ImageIOCoverImageWriter(),
-    albumNameSuggesting: any AlbumNameSuggesting = DisabledAlbumNameSuggesting()
+    albumNameSuggesting: any AlbumNameSuggesting = DisabledAlbumNameSuggesting(),
+    snapshotStore: any ScanSnapshotStoring = DisabledScanSnapshotStore(),
+    albumFolderOpener: any AlbumFolderOpening = DisabledAlbumFolderOpener(),
+    cueSheetSplitter: any CueSheetSplitting = DisabledCueSheetSplitter()
 ) async -> AppModel {
     let store = MemoryLibraryStore()
     let environment = AppEnvironment(
@@ -1980,7 +2435,10 @@ private func makeScannedAppModel(
             looseAudioPaths: []
         )),
         coverImageWriter: coverImageWriter,
-        albumNameSuggesting: albumNameSuggesting
+        albumNameSuggesting: albumNameSuggesting,
+        scanSnapshotStore: snapshotStore,
+        albumFolderOpener: albumFolderOpener,
+        cueSheetSplitter: cueSheetSplitter
     )
     let appModel = AppModel(environment: environment)
     await appModel.prepareImport(url: root)
@@ -2040,7 +2498,9 @@ private func makeAlbum(
     folderURL: URL,
     albumName: String,
     hasCover: Bool = false,
-    audioRelativePaths: [String] = []
+    audioRelativePaths: [String] = [],
+    cueRelativePaths: [String] = [],
+    issues: [AlbumScanIssue] = []
 ) -> AlbumScanRecord {
     AlbumScanRecord(
         folderURL: folderURL,
@@ -2055,6 +2515,12 @@ private func makeAlbum(
                 readError: nil
             )
         },
+        cueSheets: cueRelativePaths.map { relativePath in
+            CueSheetRecord(
+                url: folderURL.appendingPathComponent(relativePath),
+                relativePath: relativePath
+            )
+        },
         displayedCover: hasCover ? CoverCandidate(
             url: folderURL.appendingPathComponent("cover.jpg"),
             relativePath: "cover.jpg",
@@ -2062,7 +2528,7 @@ private func makeAlbum(
             depth: 0,
             source: .file
         ) : nil,
-        issues: []
+        issues: issues
     )
 }
 

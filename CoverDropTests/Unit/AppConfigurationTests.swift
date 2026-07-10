@@ -3,8 +3,8 @@ import Testing
 
 struct AppConfigurationTests {
     @Test("扫描并发默认值采用 I/O 友好的并发配置")
-    func scanConcurrencyDefaultIsEight() {
-        #expect(AppConfiguration.live.scan.maxConcurrentAlbums == 8)
+    func scanConcurrencyDefaultIsTwelve() {
+        #expect(AppConfiguration.live.scan.maxConcurrentAlbums == 12)
     }
 
     @Test("扫描并发会被限制在安全范围内")
@@ -36,12 +36,16 @@ struct AppConfigurationTests {
         #expect(AppConfiguration.RealtimeScanRefresh(debounceSeconds: 0).debounceSeconds == 0.1)
     }
 
-    @Test("封面搜索默认使用豆瓣并保留多源入口")
-    func coverSearchUsesDoubanByDefault() {
+    @Test("封面搜索默认使用聚合搜索并只保留指定网页源入口")
+    func coverSearchUsesAggregateByDefault() {
         let configuration = AppConfiguration.live.coverSearch
 
-        #expect(configuration.defaultSource.id == "douban")
-        #expect(configuration.enabledSources.map(\.id) == ["douban", "isearchAlbums", "bingImages", "googleImages"])
+        #expect(configuration.defaultSource.id == "aggregate")
+        #expect(configuration.defaultSource.kind == .aggregate)
+        #expect(configuration.enabledSources.map(\.id) == ["aggregate", "douban", "bingImages", "googleImages"])
+        #expect(!configuration.enabledSources.map(\.id).contains("isearchAlbums"))
+        #expect(!configuration.enabledSources.map(\.id).contains("appleMusic"))
+        #expect(configuration.source(id: "aggregate").url(for: "周杰伦 七里香") == nil)
     }
 
     @Test("封面搜索关键词由歌手和专辑组成")
@@ -59,6 +63,7 @@ struct AppConfigurationTests {
         let source = AppConfiguration.CoverSearchSource(
             id: "test",
             displayName: "测试",
+            kind: .web,
             urlTemplate: "https://example.com/search?q={query}"
         )
 
@@ -73,17 +78,11 @@ struct AppConfigurationTests {
         let keyword = "周杰伦 七里香"
 
         let doubanURL = try #require(search.source(id: "douban").url(for: keyword))
-        let isearchURL = try #require(search.source(id: "isearchAlbums").url(for: keyword))
         let bingURL = try #require(search.source(id: "bingImages").url(for: keyword))
         let googleURL = try #require(search.source(id: "googleImages").url(for: keyword))
 
         #expect(doubanURL.absoluteString.contains("search.douban.com/music/subject_search"))
         #expect(doubanURL.absoluteString.contains("search_text=%E5%91%A8%E6%9D%B0%E4%BC%A6%20%E4%B8%83%E9%87%8C%E9%A6%99"))
-        #expect(isearchURL.absoluteString.contains("i.oppsu.cn"))
-        #expect(isearchURL.absoluteString.contains("q=%E5%91%A8%E6%9D%B0%E4%BC%A6%20%E4%B8%83%E9%87%8C%E9%A6%99"))
-        #expect(isearchURL.absoluteString.contains("country=CN"))
-        #expect(isearchURL.absoluteString.contains("media=music"))
-        #expect(isearchURL.absoluteString.contains("entity=album"))
         #expect(bingURL.absoluteString.contains("bing.com/images/search"))
         #expect(googleURL.absoluteString.contains("google.com/search"))
         #expect(bingURL.absoluteString.contains("%E5%B0%81%E9%9D%A2"))

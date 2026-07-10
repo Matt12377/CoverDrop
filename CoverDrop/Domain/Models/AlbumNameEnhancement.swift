@@ -73,6 +73,47 @@ struct AlbumNameEnhancementStatus: Equatable, Sendable {
     }
 }
 
+struct AlbumNameEnhancementProgress: Equatable, Sendable {
+    let completedAlbums: Int
+    let totalAlbums: Int
+    let currentAlbumName: String?
+
+    nonisolated init(
+        completedAlbums: Int,
+        totalAlbums: Int,
+        currentAlbumName: String?
+    ) {
+        self.completedAlbums = max(0, completedAlbums)
+        self.totalAlbums = max(0, totalAlbums)
+        self.currentAlbumName = currentAlbumName
+    }
+
+    var fraction: Double {
+        guard totalAlbums > 0 else { return 0 }
+        return Double(min(completedAlbums, totalAlbums)) / Double(totalAlbums)
+    }
+
+    var isFinished: Bool {
+        totalAlbums > 0 && completedAlbums >= totalAlbums
+    }
+
+    var actionDescription: String {
+        if isFinished {
+            return "智能解析完成"
+        }
+
+        if let currentAlbumName, !currentAlbumName.isEmpty {
+            return "正在智能解析 \(currentAlbumName)"
+        }
+
+        return "准备智能解析"
+    }
+
+    var completedDescription: String {
+        "\(min(completedAlbums, totalAlbums)) / \(totalAlbums) 张专辑"
+    }
+}
+
 struct AlbumNameEnhancementAlbumState: Equatable, Sendable {
     let isQueued: Bool
     let isRunning: Bool

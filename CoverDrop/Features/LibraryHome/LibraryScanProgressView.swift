@@ -19,13 +19,11 @@ struct LibraryScanProgressView: View {
                 .truncationMode(.middle)
                 .help(progress.targetPath)
 
-            if let fraction = progress.albumProgressFraction {
-                ProgressView(value: fraction)
-                    .progressViewStyle(.linear)
-            } else {
-                ProgressView()
-                    .progressViewStyle(.linear)
-            }
+            ScanProgressBar(
+                fraction: progress.albumProgressFraction,
+                isSlowIndeterminate: progress.phase == .discoveringAlbums
+            )
+            .frame(height: 6)
 
             Text(progress.completedDescription)
                 .font(.caption)

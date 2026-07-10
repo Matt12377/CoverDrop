@@ -21,6 +21,39 @@ struct FileSystemLibraryScannerTests {
         }
     }
 
+    @Test("单整轨加 CUE 会记录 CUE 文件并标记需要分轨确认")
+    func singleImageAlbumWithCueRecordsCueSheet() async throws {
+        try await withTemporaryDirectory { root in
+            try makeAudio("歌手/整轨专辑/album.ape", under: root)
+            try makeCue("歌手/整轨专辑/album.cue", under: root)
+
+            let result = try await makeScanner().scan(libraryURL: root, role: .library)
+            let album = try #require(result.albums.first)
+
+            #expect(album.audioFiles.map(\.relativePath) == ["album.ape"])
+            #expect(album.cueSheets.map(\.relativePath) == ["album.cue"])
+            #expect(album.issues == [.singleFileNeedsConfirmation(hasCue: true)])
+        }
+    }
+
+    @Test("多音轨加 CUE 不标记为单整轨未分轨")
+    func multiTrackAlbumWithCueDoesNotBecomeSingleImageIssue() async throws {
+        try await withTemporaryDirectory { root in
+            try makeAudio("歌手/已分轨专辑/01.flac", under: root)
+            try makeAudio("歌手/已分轨专辑/02.flac", under: root)
+            try makeCue("歌手/已分轨专辑/album.cue", under: root)
+
+            let result = try await makeScanner().scan(libraryURL: root, role: .library)
+            let album = try #require(result.albums.first)
+
+            #expect(album.cueSheets.map(\.relativePath) == ["album.cue"])
+            #expect(!album.issues.contains { issue in
+                if case .singleFileNeedsConfirmation = issue { return true }
+                return false
+            })
+        }
+    }
+
     @Test("单张专辑合并多碟子目录并按标签轨号排序")
     func mergesDiscFoldersAndSortsByMetadata() async throws {
         try await withTemporaryDirectory { root in
@@ -241,11 +274,6 @@ struct FileSystemLibraryScannerTests {
 
             #expect(result.albums.count == 2)
             #expect(result.albums.allSatisfy { $0.needsAttention })
-            #expect(AlbumScanResultFiltering.albums(
-                in: result,
-                filter: .needsAttention,
-                query: ""
-            ).count == 2)
             #expect(result.albums.flatMap(\.issues).contains {
                 if case .uncertainAlbumBoundary = $0 { return true }
                 return false
@@ -534,6 +562,19 @@ struct FileSystemLibraryScannerTests {
             withIntermediateDirectories: true
         )
         try Data([0]).write(to: url)
+    }
+
+    private func makeCue(_ relativePath: String, under root: URL) throws {
+        let url = root.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("""
+        FILE "album.ape" WAVE
+          TRACK 01 AUDIO
+            INDEX 01 00:00:00
+        """.utf8).write(to: url)
     }
 
     private func writeValidPNG(to url: URL) throws {

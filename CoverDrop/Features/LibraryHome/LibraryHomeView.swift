@@ -210,7 +210,7 @@ struct LibraryHomeView: View {
                 scanSnapshotLoadingPage(library: library)
             } else if appModel.shouldShowCoverWallForSelectedLibrary,
                let result = appModel.scanResultForSelectedLibrary {
-                coverWallPage(library: library, result: result)
+                coverWallPage(result: result)
             } else {
                 coverWallEmptyPage
             }
@@ -225,8 +225,11 @@ struct LibraryHomeView: View {
                 .font(.callout.weight(.medium))
                 .foregroundStyle(LibraryHomeDesignToken.textSecondary)
 
-            ScanProgressBar(fraction: appModel.scanProgress?.albumProgressFraction)
-                .frame(width: 260, height: 6)
+            ScanProgressBar(
+                fraction: appModel.scanProgress?.albumProgressFraction,
+                isSlowIndeterminate: appModel.scanProgress?.phase == .discoveringAlbums
+            )
+            .frame(width: 260, height: 6)
 
             Text(appModel.scanProgress?.completedDescription ?? "正在建立专辑清单…")
                 .font(.caption)
@@ -269,50 +272,8 @@ struct LibraryHomeView: View {
         .background(LibraryHomeDesignToken.bgSecondary.ignoresSafeArea())
     }
 
-    private func coverWallPage(
-        library: LibraryRecord,
-        result: LibraryScanResult
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(library.displayName)
-                        .font(.title3.bold())
-                        .foregroundStyle(LibraryHomeDesignToken.textPrimary)
-                    Text("扫描结果 · \(library.rootPath)")
-                        .font(.caption)
-                        .foregroundStyle(LibraryHomeDesignToken.textSecondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .help(library.rootPath)
-
-                    if let snapshot = appModel.activeScanSnapshot(for: library.id) {
-                        Text("快照结果 · \(snapshot.fileURL.lastPathComponent)")
-                            .font(.caption)
-                            .foregroundStyle(LibraryHomeDesignToken.textSecondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .help(snapshot.fileURL.path)
-                    }
-
-                    if let message = appModel.realtimeRefreshMessage(for: library.id) {
-                        Text(message)
-                            .font(.caption)
-                            .foregroundStyle(LibraryHomeDesignToken.textSecondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-
-                Spacer()
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
-
-            LibraryDividerLine()
-
-            LibraryScanSummaryView(result: result, appModel: appModel)
-        }
+    private func coverWallPage(result: LibraryScanResult) -> some View {
+        LibraryScanSummaryView(result: result, appModel: appModel)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(LibraryHomeDesignToken.bgSecondary.ignoresSafeArea())
     }
@@ -372,6 +333,17 @@ struct LibraryHomeView: View {
             appModel.isScanningLibrary ||
             appModel.isLoadingScanSnapshot(for: library.id) ||
             appModel.latestScanSnapshot(for: library.id) == nil ||
+            !isSingleAction
+        )
+
+        Button(appModel.isAlbumNameEnhancementRunning(for: library.id) ? "智能解析中" : "智能解析") {
+            prepareContextSelection(for: library.id)
+            appModel.requestAlbumNameEnhancement(forLibraryID: library.id)
+        }
+        .disabled(
+            appModel.isScanningLibrary ||
+            appModel.scanResultsByLibraryID[library.id] == nil ||
+            appModel.isAlbumNameEnhancementRunning(for: library.id) ||
             !isSingleAction
         )
 
@@ -621,27 +593,134 @@ private struct LibraryListItem: View {
     }
 }
 
-private struct ScanProgressBar: View {
+struct ScanProgressBar: View {
     let fraction: Double?
+    var isSlowIndeterminate = false
 
     var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(LibraryHomeDesignToken.bgElevated)
+        TimelineView(.animation) { timeline in
+            GeometryReader { proxy in
+                let width = proxy.size.width
+                let height = proxy.size.height
+                let phase = timeline.date.timeIntervalSinceReferenceDate
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(LibraryHomeDesignToken.bgElevated)
 
-                Capsule()
-                    .fill(LibraryHomeDesignToken.accent.opacity(fraction == nil ? 0.45 : 1))
-                    .frame(width: progressWidth(in: proxy.size.width))
+                    if let fraction {
+                        determinateBar(
+                            width: progressWidth(in: width, fraction: fraction),
+                            height: height,
+                            phase: phase
+                        )
+                    } else {
+                        indeterminateBar(totalWidth: width, height: height, phase: phase)
+                    }
+                }
+                .clipShape(Capsule())
             }
         }
         .accessibilityLabel("扫描进度")
+        .accessibilityValue(accessibilityValue)
     }
 
-    private func progressWidth(in totalWidth: CGFloat) -> CGFloat {
-        guard let fraction else {
-            return max(totalWidth * 0.28, 44)
+    private func determinateBar(
+        width: CGFloat,
+        height: CGFloat,
+        phase: TimeInterval
+    ) -> some View {
+        ZStack(alignment: .leading) {
+            Capsule()
+                .fill(LibraryHomeDesignToken.accent)
+
+            MovingProgressStripes(
+                width: max(width, 1),
+                height: height,
+                phase: phase,
+                speed: 0.32
+            )
+            .opacity(width > 2 ? 1 : 0)
         }
+            .frame(width: width)
+            .clipShape(Capsule())
+            .animation(.snappy(duration: 0.28, extraBounce: 0.02), value: width)
+    }
+
+    private func indeterminateBar(totalWidth: CGFloat, height: CGFloat, phase: TimeInterval) -> some View {
+        let barWidth = max(totalWidth * 0.30, 48)
+        let speed = isSlowIndeterminate ? 0.34 : 0.58
+
+        return ZStack(alignment: .leading) {
+            Capsule()
+                .fill(LibraryHomeDesignToken.accent.opacity(0.92))
+
+            MovingProgressStripes(
+                width: barWidth,
+                height: height,
+                phase: phase,
+                speed: 0.42
+            )
+        }
+        .frame(width: barWidth)
+        .clipShape(Capsule())
+        .offset(x: overflowBounceOffset(
+            totalWidth: totalWidth,
+            barWidth: barWidth,
+            phase: phase,
+            speed: speed
+        ))
+    }
+
+    private func progressWidth(in totalWidth: CGFloat, fraction: Double) -> CGFloat {
         return totalWidth * CGFloat(min(max(fraction, 0), 1))
+    }
+
+    private func overflowBounceOffset(
+        totalWidth: CGFloat,
+        barWidth: CGFloat,
+        phase: TimeInterval,
+        speed: Double
+    ) -> CGFloat {
+        guard totalWidth > 0, barWidth > 0 else { return 0 }
+
+        let visibleTipWidth = min(max(totalWidth * 0.08, 14), barWidth * 0.42)
+        let leftOffset = -barWidth + visibleTipWidth
+        let rightOffset = totalWidth - visibleTipWidth
+        let travelWidth = rightOffset - leftOffset
+        let progress = (phase * speed).truncatingRemainder(dividingBy: 1)
+        let eased = 0.5 - cos(progress * .pi * 2) * 0.5
+        return leftOffset + travelWidth * eased
+    }
+
+    private var accessibilityValue: String {
+        guard let fraction else { return "正在处理" }
+        return "\(Int((min(max(fraction, 0), 1) * 100).rounded()))%"
+    }
+}
+
+private struct MovingProgressStripes: View {
+    let width: CGFloat
+    let height: CGFloat
+    let phase: TimeInterval
+    let speed: Double
+
+    var body: some View {
+        let stripeSpacing = max(height * 2.6, 12)
+        let stripeWidth = max(height * 0.65, 3)
+        let stripeCount = max(Int((width / stripeSpacing).rounded(.up)) + 8, 10)
+        let offset = CGFloat((phase * speed).truncatingRemainder(dividingBy: 1)) * stripeSpacing
+
+        HStack(spacing: max(stripeSpacing - stripeWidth, 1)) {
+            ForEach(0..<stripeCount, id: \.self) { _ in
+                RoundedRectangle(cornerRadius: stripeWidth / 2)
+                    .fill(Color.white.opacity(0.22))
+                    .frame(width: stripeWidth, height: max(height * 3.4, 18))
+                    .rotationEffect(.degrees(24))
+            }
+        }
+        .offset(x: -stripeSpacing * 3 + offset)
+        .frame(width: width, height: height, alignment: .leading)
+        .clipped()
+        .allowsHitTesting(false)
     }
 }

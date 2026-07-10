@@ -40,11 +40,11 @@ struct AppConfiguration: Equatable, Sendable {
         /// 同时扫描的专辑数量。
         ///
         /// 当前音乐库位于 SMB 网络共享时，瓶颈通常是 NAS/网络/小文件 I/O，
-        /// 不是 Mac CPU。默认 8 能更充分利用等待 I/O 的时间，同时仍限制峰值压力。
+        /// 不是 Mac CPU。默认 12 能更充分利用等待 I/O 的时间，同时仍限制峰值压力。
         let maxConcurrentAlbums: Int
 
         static let minimumConcurrentAlbums = 1
-        static let defaultConcurrentAlbums = 8
+        static let defaultConcurrentAlbums = 12
         static let maximumConcurrentAlbums = 24
 
         init(maxConcurrentAlbums: Int = Self.defaultConcurrentAlbums) {
@@ -87,24 +87,33 @@ struct AppConfiguration: Equatable, Sendable {
     }
 
     struct CoverSearchSource: Identifiable, Equatable, Sendable {
+        enum Kind: Equatable, Sendable {
+            case aggregate
+            case web
+        }
+
         let id: String
         let displayName: String
-        let urlTemplate: String
+        let kind: Kind
+        let urlTemplate: String?
         let isEnabled: Bool
 
         init(
             id: String,
             displayName: String,
-            urlTemplate: String,
+            kind: Kind = .web,
+            urlTemplate: String? = nil,
             isEnabled: Bool = true
         ) {
             self.id = id
             self.displayName = displayName
+            self.kind = kind
             self.urlTemplate = urlTemplate
             self.isEnabled = isEnabled
         }
 
         func url(for keyword: String) -> URL? {
+            guard kind == .web, let urlTemplate else { return nil }
             let encodedKeyword = Self.encode(keyword)
             return URL(string: urlTemplate.replacingOccurrences(of: "{query}", with: encodedKeyword))
         }
@@ -130,7 +139,7 @@ struct AppConfiguration: Equatable, Sendable {
 
         init(
             sources: [CoverSearchSource] = Self.defaultSources,
-            defaultSourceID: CoverSearchSource.ID = "douban"
+            defaultSourceID: CoverSearchSource.ID = "aggregate"
         ) {
             self.sources = sources
             self.defaultSourceID = defaultSourceID
@@ -142,14 +151,14 @@ struct AppConfiguration: Equatable, Sendable {
 
         static let defaultSources: [CoverSearchSource] = [
             CoverSearchSource(
+                id: "aggregate",
+                displayName: "聚合搜索",
+                kind: .aggregate
+            ),
+            CoverSearchSource(
                 id: "douban",
                 displayName: "豆瓣",
                 urlTemplate: "https://search.douban.com/music/subject_search?search_text={query}&cat=1003"
-            ),
-            CoverSearchSource(
-                id: "isearchAlbums",
-                displayName: "iSearch 专辑",
-                urlTemplate: "https://i.oppsu.cn/?q={query}&country=CN&media=music&entity=album"
             ),
             CoverSearchSource(
                 id: "bingImages",

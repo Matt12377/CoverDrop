@@ -23,6 +23,7 @@ struct SQLiteScanSnapshotStoreTests {
             #expect(result.albums.count == 2)
             #expect(result.looseAudioPaths == ["Loose/track.flac"])
             #expect(firstAlbum.audioFiles.first?.metadata?.title == "第一首")
+            #expect(firstAlbum.cueSheets.map(\.relativePath) == ["album.cue"])
             #expect(firstAlbum.displayedCover?.source == .file)
             #expect(firstAlbum.issues.first?.displayName == "专辑边界需要确认：版本目录需要确认")
             #expect(loaded.albumNameEnhancement?.makeSuggestionsByAlbumID()[firstAlbum.id]?.albumName == "增强专辑 0")
@@ -91,6 +92,47 @@ struct SQLiteScanSnapshotStoreTests {
 
             #expect(latest?.fileURL == legacySummary.fileURL)
             #expect(loaded.scanResult.albums.count == 1)
+        }
+    }
+
+    @Test("SQLite store 兼容读取没有 CUE 字段的 v1 JSON 快照")
+    func sqliteStoreLoadsVersionOneJSONSnapshotWithoutCueSheets() async throws {
+        try await withTemporaryDirectory { root in
+            let store = SQLiteScanSnapshotStore(directoryURL: root)
+            let library = makeLibrary(rootPath: "/Volumes/Music", role: .library)
+            let fileURL = root.appendingPathComponent("legacy-v1.db")
+            try Data("""
+            {
+              "schemaVersion" : 1,
+              "createdAt" : "2026-01-02T03:04:05Z",
+              "library" : {
+                "id" : "\(library.id.uuidString)",
+                "displayName" : "\(library.displayName)",
+                "rootPath" : "\(library.rootPath)",
+                "role" : "\(library.role.rawValue)"
+              },
+              "scanResult" : {
+                "albums" : [
+                  {
+                    "folderPath" : "\(library.rootPath)/Artist/Album",
+                    "artistName" : "Artist",
+                    "albumName" : "Album",
+                    "audioFiles" : [],
+                    "displayedCover" : null,
+                    "issues" : []
+                  }
+                ],
+                "looseAudioPaths" : []
+              },
+              "albumNameEnhancement" : null
+            }
+            """.utf8).write(to: fileURL)
+
+            let loaded = try await store.loadSnapshot(at: fileURL, expectedLibrary: library)
+            let result = try loaded.scanResult.makeLibraryScanResult()
+
+            #expect(loaded.schemaVersion == 1)
+            #expect(result.albums.first?.cueSheets == [])
         }
     }
 
@@ -166,6 +208,12 @@ struct SQLiteScanSnapshotStoreTests {
                         embeddedArtworkURL: albumFolder.appendingPathComponent("artwork.jpg")
                     ),
                     readError: nil
+                )
+            ],
+            cueSheets: [
+                CueSheetRecord(
+                    url: albumFolder.appendingPathComponent("album.cue"),
+                    relativePath: "album.cue"
                 )
             ],
             displayedCover: CoverCandidate(

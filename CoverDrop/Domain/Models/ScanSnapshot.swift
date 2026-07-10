@@ -1,7 +1,7 @@
 import Foundation
 
 struct ScanSnapshot: Codable, Equatable, Sendable {
-    nonisolated static let currentSchemaVersion = 1
+    nonisolated static let currentSchemaVersion = 2
 
     let schemaVersion: Int
     let createdAt: Date
@@ -81,6 +81,7 @@ extension ScanSnapshot {
         let artistName: String
         let albumName: String
         let audioFiles: [AudioFile]
+        let cueSheets: [CueSheet]
         let displayedCover: Cover?
         let issues: [Issue]
 
@@ -89,6 +90,7 @@ extension ScanSnapshot {
             artistName: String,
             albumName: String,
             audioFiles: [AudioFile],
+            cueSheets: [CueSheet] = [],
             displayedCover: Cover?,
             issues: [Issue]
         ) {
@@ -96,6 +98,7 @@ extension ScanSnapshot {
             self.artistName = artistName
             self.albumName = albumName
             self.audioFiles = audioFiles
+            self.cueSheets = cueSheets
             self.displayedCover = displayedCover
             self.issues = issues
         }
@@ -105,8 +108,30 @@ extension ScanSnapshot {
             artistName = album.artistName
             albumName = album.albumName
             audioFiles = album.audioFiles.map(AudioFile.init(audioFile:))
+            cueSheets = album.cueSheets.map(CueSheet.init(cueSheet:))
             displayedCover = album.displayedCover.map(Cover.init(cover:))
             issues = album.issues.map(Issue.init(issue:))
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case folderPath
+            case artistName
+            case albumName
+            case audioFiles
+            case cueSheets
+            case displayedCover
+            case issues
+        }
+
+        nonisolated init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            folderPath = try container.decode(String.self, forKey: .folderPath)
+            artistName = try container.decode(String.self, forKey: .artistName)
+            albumName = try container.decode(String.self, forKey: .albumName)
+            audioFiles = try container.decode([AudioFile].self, forKey: .audioFiles)
+            cueSheets = try container.decodeIfPresent([CueSheet].self, forKey: .cueSheets) ?? []
+            displayedCover = try container.decodeIfPresent(Cover.self, forKey: .displayedCover)
+            issues = try container.decode([Issue].self, forKey: .issues)
         }
 
         nonisolated func makeAlbumScanRecord() throws -> AlbumScanRecord {
@@ -115,6 +140,7 @@ extension ScanSnapshot {
                 artistName: artistName,
                 albumName: albumName,
                 audioFiles: try audioFiles.map { try $0.makeAudioFileRecord() },
+                cueSheets: cueSheets.map { $0.makeCueSheetRecord() },
                 displayedCover: displayedCover?.makeCoverCandidate(),
                 issues: try issues.map { try $0.makeAlbumScanIssue() }
             )
@@ -157,6 +183,31 @@ extension ScanSnapshot {
                 format: format,
                 metadata: metadata?.makeAudioMetadata(),
                 readError: readError
+            )
+        }
+    }
+
+    struct CueSheet: Codable, Equatable, Sendable {
+        let path: String
+        let relativePath: String
+
+        nonisolated init(
+            path: String,
+            relativePath: String
+        ) {
+            self.path = path
+            self.relativePath = relativePath
+        }
+
+        nonisolated init(cueSheet: CueSheetRecord) {
+            path = cueSheet.url.standardizedFileURL.path
+            relativePath = cueSheet.relativePath
+        }
+
+        nonisolated func makeCueSheetRecord() -> CueSheetRecord {
+            CueSheetRecord(
+                url: URL(fileURLWithPath: path),
+                relativePath: relativePath
             )
         }
     }

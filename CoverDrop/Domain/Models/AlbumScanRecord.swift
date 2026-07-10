@@ -40,6 +40,12 @@ struct AudioFileRecord: Identifiable, Equatable, Sendable {
     let readError: String?
 }
 
+struct CueSheetRecord: Identifiable, Equatable, Sendable {
+    nonisolated var id: String { relativePath }
+    let url: URL
+    let relativePath: String
+}
+
 enum CoverSource: Equatable, Sendable {
     case file
     case embeddedArtwork
@@ -113,10 +119,29 @@ struct AlbumScanRecord: Identifiable, Equatable, Sendable {
     let artistName: String
     let albumName: String
     let audioFiles: [AudioFileRecord]
+    let cueSheets: [CueSheetRecord]
     let displayedCover: CoverCandidate?
     let issues: [AlbumScanIssue]
 
     nonisolated var needsAttention: Bool { !issues.isEmpty }
+
+    nonisolated init(
+        folderURL: URL,
+        artistName: String,
+        albumName: String,
+        audioFiles: [AudioFileRecord],
+        cueSheets: [CueSheetRecord] = [],
+        displayedCover: CoverCandidate?,
+        issues: [AlbumScanIssue]
+    ) {
+        self.folderURL = folderURL
+        self.artistName = artistName
+        self.albumName = albumName
+        self.audioFiles = audioFiles
+        self.cueSheets = cueSheets
+        self.displayedCover = displayedCover
+        self.issues = issues
+    }
 }
 
 struct LibraryScanResult: Equatable, Sendable {

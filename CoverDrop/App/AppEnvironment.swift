@@ -15,6 +15,9 @@ struct AppEnvironment: Sendable {
     let coverDetector: any CoverDetecting
     let albumNameSuggesting: any AlbumNameSuggesting
     let scanSnapshotStore: any ScanSnapshotStoring
+    let albumFolderOpener: any AlbumFolderOpening
+    let cueSheetSplitter: any CueSheetSplitting
+    let coverSearchClient: any CoverSearching
 
     init(
         configuration: AppConfiguration = .live,
@@ -26,7 +29,10 @@ struct AppEnvironment: Sendable {
         coverImageWriter: any CoverImageWriting,
         coverDetector: any CoverDetecting = ImageIOCoverDetector(),
         albumNameSuggesting: any AlbumNameSuggesting = DisabledAlbumNameSuggesting(),
-        scanSnapshotStore: any ScanSnapshotStoring = DisabledScanSnapshotStore()
+        scanSnapshotStore: any ScanSnapshotStoring = DisabledScanSnapshotStore(),
+        albumFolderOpener: any AlbumFolderOpening = DisabledAlbumFolderOpener(),
+        cueSheetSplitter: any CueSheetSplitting = DisabledCueSheetSplitter(),
+        coverSearchClient: any CoverSearching = CompositeCoverSearchClient.live
     ) {
         self.configuration = configuration
         self.libraryStore = libraryStore
@@ -38,6 +44,9 @@ struct AppEnvironment: Sendable {
         self.coverDetector = coverDetector
         self.albumNameSuggesting = albumNameSuggesting
         self.scanSnapshotStore = scanSnapshotStore
+        self.albumFolderOpener = albumFolderOpener
+        self.cueSheetSplitter = cueSheetSplitter
+        self.coverSearchClient = coverSearchClient
     }
 
     static let live: AppEnvironment = {
@@ -63,7 +72,10 @@ struct AppEnvironment: Sendable {
             ),
             scanSnapshotStore: SQLiteScanSnapshotStore(
                 directoryURL: configuration.scanDatabases.directoryURL
-            )
+            ),
+            albumFolderOpener: FinderAlbumFolderOpener(),
+            cueSheetSplitter: XLDCueSheetSplitter(),
+            coverSearchClient: CompositeCoverSearchClient.live
         )
     }()
 }

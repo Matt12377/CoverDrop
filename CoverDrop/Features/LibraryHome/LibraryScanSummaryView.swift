@@ -11,24 +11,43 @@ struct LibraryScanSummaryView: View {
     @State private var query = ""
     @State private var selectedAlbumID: AlbumScanRecord.ID?
     @State private var isShowingAlbumDetail = false
+    @State private var isSearchExpanded = false
+    @State private var hoveredFilter: AlbumScanResultFilter?
+    @State private var filterSlideDirection: FilterSlideDirection = .forward
+    @State private var debouncedQuery = ""
+    @State private var queryDebounceTask: Task<Void, Never>?
+    @State private var isUnsplitSelectionMode = false
+    @State private var unsplitSelection = UnsplitAlbumSelection()
+    @Namespace private var filterSelectionNamespace
     @FocusState private var isQueryFocused: Bool
 
+    private enum FilterSlideDirection {
+        case forward
+        case backward
+    }
+
     private var filteredAlbums: [AlbumScanRecord] {
-        AlbumScanResultFiltering.albums(
-            in: result,
+        appModel.filteredAlbumsInSelectedLibrary(
             filter: filter,
-            query: query,
-            displayNames: { album in
-                (
-                    artistName: appModel.displayArtistName(for: album),
-                    albumName: appModel.displayAlbumName(for: album)
-                )
-            }
+            query: debouncedQuery
         )
     }
 
     private var filteredLooseAudioPaths: [String] {
-        AlbumScanResultFiltering.looseAudioPaths(in: result, filter: filter, query: query)
+        appModel.filteredLooseAudioPathsInSelectedLibrary(filter: filter, query: debouncedQuery)
+    }
+
+    private var stats: AlbumScanResultStats {
+        if let libraryID = appModel.selectedLibraryID,
+           let stats = appModel.scanResultStats(for: libraryID) {
+            return stats
+        }
+        return AlbumScanResultStats(
+            albumCount: result.albums.count,
+            albumsWithCover: result.albumsWithCover,
+            albumsNeedingAttention: result.albumsNeedingAttention,
+            looseAudioCount: result.looseAudioPaths.count
+        )
     }
 
     var body: some View {
@@ -36,27 +55,21 @@ struct LibraryScanSummaryView: View {
         let visibleLooseAudioPaths = filteredLooseAudioPaths
 
         VStack(alignment: .leading, spacing: 0) {
-            statsRow(visibleResultCount: visibleAlbums.count + visibleLooseAudioPaths.count)
+            libraryOverviewHeader()
 
-            filterControls
-
-            if !visibleAlbums.isEmpty {
-                albumGrid(albums: visibleAlbums)
-            } else if filter != .looseAudio {
-                emptyState("没有符合筛选条件的专辑。", systemImage: "square.grid.2x2")
-            }
-
-            if !visibleLooseAudioPaths.isEmpty {
-                if !visibleAlbums.isEmpty {
-                    LibraryDividerLine()
-                }
-                looseAudioList(paths: visibleLooseAudioPaths)
-            } else if filter == .looseAudio {
-                emptyState("没有符合筛选条件的散落音频。", systemImage: "music.note.list")
-            }
+            filteredContent(
+                visibleAlbums: visibleAlbums,
+                visibleLooseAudioPaths: visibleLooseAudioPaths
+            )
+            .id(filter)
+            .transition(filterContentTransition)
         }
+        .clipped()
         .background(LibraryHomeDesignToken.bgSecondary)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .overlay(alignment: .bottom) {
+            bottomFilterBar
+        }
         .overlay {
             albumDetailOverlay
         }
@@ -75,6 +88,36 @@ struct LibraryScanSummaryView: View {
                 clearSelectedAlbumDetail()
             }
         }
+        .onChange(of: query) { _, newValue in
+            scheduleQueryDebounce(newValue)
+        }
+        .onDisappear {
+            queryDebounceTask?.cancel()
+        }
+    }
+
+    @ViewBuilder
+    private func filteredContent(
+        visibleAlbums: [AlbumScanRecord],
+        visibleLooseAudioPaths: [String]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if !visibleAlbums.isEmpty {
+                albumGrid(albums: visibleAlbums)
+            } else if filter != .looseAudio {
+                emptyState(emptyAlbumStateTitle, systemImage: "square.grid.2x2")
+            }
+
+            if !visibleLooseAudioPaths.isEmpty {
+                if !visibleAlbums.isEmpty {
+                    LibraryDividerLine()
+                }
+                looseAudioList(paths: visibleLooseAudioPaths)
+            } else if filter == .looseAudio {
+                emptyState("没有符合筛选条件的散落音频。", systemImage: "music.note.list")
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder
@@ -93,73 +136,407 @@ struct LibraryScanSummaryView: View {
                         onClose: closeAlbumDetail
                     )
                     .onTapGesture {}
+                    .transition(.scale(scale: 0.97).combined(with: .opacity))
                 }
                 .transition(.opacity)
+                .animation(detailTransitionAnimation, value: isShowingAlbumDetail)
         }
     }
 
-    private func statsRow(visibleResultCount: Int) -> some View {
-        HStack(spacing: 10) {
-            statItem(title: "专辑", value: result.albums.count, valueColor: LibraryHomeDesignToken.textPrimary)
-            statDivider
-            statItem(title: "已有封面", value: result.albumsWithCover, valueColor: LibraryHomeDesignToken.success)
-            statDivider
-            statItem(
-                title: "缺封面",
-                value: result.albums.count - result.albumsWithCover,
-                valueColor: LibraryHomeDesignToken.destructive
-            )
-            statDivider
-            statItem(title: "需确认", value: result.albumsNeedingAttention, valueColor: LibraryHomeDesignToken.warning)
-            statDivider
-            statItem(title: "散落音频", value: result.looseAudioPaths.count, valueColor: LibraryHomeDesignToken.textPrimary)
+    private var selectedLibrary: LibraryRecord? {
+        appModel.selectedLibrary
+    }
 
-            Spacer()
+    private var selectedLibraryProgress: AlbumNameEnhancementProgress? {
+        guard let library = selectedLibrary else { return nil }
+        return appModel.albumNameEnhancementProgress(for: library.id)
+    }
 
-            Text("\(visibleResultCount) 项")
-                .font(.caption.weight(.medium))
-                .foregroundStyle(LibraryHomeDesignToken.textTertiary)
+    private var currentActionDescription: String {
+        guard let library = selectedLibrary else { return "等待选择音乐库" }
+
+        if let progress = selectedLibraryProgress,
+           progress.totalAlbums > 0 {
+            if progress.isFinished,
+               let failureSummary = appModel.albumNameEnhancementFailureSummary(for: library.id) {
+                return failureSummary
+            }
+            return progress.actionDescription
+        }
+
+        if let refreshMessage = appModel.realtimeRefreshMessage(for: library.id) {
+            return refreshMessage
+        }
+
+        if appModel.albumNameEnhancementStatus(for: library.id)?.isRunning == true {
+            return "正在智能解析专辑名"
+        }
+
+        return "空闲"
+    }
+
+    private var currentActionColor: Color {
+        guard let library = selectedLibrary else { return LibraryHomeDesignToken.textTertiary }
+
+        if let progress = selectedLibraryProgress,
+           progress.totalAlbums > 0 {
+            if progress.isFinished,
+               appModel.albumNameEnhancementFailedAlbumCount(for: library.id) > 0 {
+                return LibraryHomeDesignToken.warning
+            }
+            return progress.isFinished ? LibraryHomeDesignToken.success : LibraryHomeDesignToken.accent
+        }
+
+        if appModel.albumNameEnhancementStatus(for: library.id)?.isRunning == true {
+            return LibraryHomeDesignToken.accent
+        }
+
+        if appModel.albumNameEnhancementFailedAlbumCount(for: library.id) > 0 {
+            return LibraryHomeDesignToken.warning
+        }
+
+        return LibraryHomeDesignToken.textTertiary
+    }
+
+    private func libraryOverviewHeader() -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 20) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(selectedLibrary?.displayName ?? "未选择音乐库")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(LibraryHomeDesignToken.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+
+                    Text(selectedLibrary?.rootPath ?? "没有可显示的音乐库地址")
+                        .font(.system(size: 11, weight: .regular, design: .monospaced))
+                        .foregroundStyle(LibraryHomeDesignToken.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(selectedLibrary?.rootPath ?? "")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                VStack(alignment: .trailing, spacing: 6) {
+                    Text("当前动作")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(LibraryHomeDesignToken.textTertiary)
+
+                    Text(currentActionDescription)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(currentActionColor)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(currentActionDescription)
+                }
+                .frame(width: 220, alignment: .trailing)
+            }
+
+            HStack(spacing: 0) {
+                SummaryStatText(title: "专辑数量", value: stats.albumCount, valueColor: LibraryHomeDesignToken.textPrimary)
+                SummaryStatText(title: "已有封面", value: stats.albumsWithCover, valueColor: LibraryHomeDesignToken.success)
+                SummaryStatText(title: "缺封面", value: stats.albumsMissingCover, valueColor: LibraryHomeDesignToken.destructive)
+                SummaryStatText(title: "需确认", value: stats.albumsNeedingAttention, valueColor: LibraryHomeDesignToken.warning)
+                SummaryStatText(title: "散落音频", value: stats.looseAudioCount, valueColor: LibraryHomeDesignToken.textPrimary)
+            }
+
+            if let progress = selectedLibraryProgress,
+               progress.totalAlbums > 0 {
+                VStack(alignment: .leading, spacing: 6) {
+                    ScanProgressBar(fraction: progress.fraction)
+                        .frame(height: 5)
+
+                    HStack(spacing: 8) {
+                        Text(progress.completedDescription)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(LibraryHomeDesignToken.textSecondary)
+                            .monospacedDigit()
+
+                        Spacer(minLength: 8)
+
+                        Text(progress.isFinished ? currentActionDescription : progress.actionDescription)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(progress.isFinished ? currentActionColor : LibraryHomeDesignToken.accent)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+            }
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 8)
+        .padding(.top, 18)
+        .padding(.bottom, 14)
+        .background(LibraryHomeDesignToken.bgSecondary)
         .overlay(alignment: .bottom) {
             LibraryDividerLine()
         }
     }
 
-    private var filterControls: some View {
-        HStack(spacing: 12) {
-            Picker("结果筛选", selection: $filter) {
+    private var bottomFilterBar: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 3) {
                 ForEach(AlbumScanResultFilter.allCases) { option in
-                    Text(option.displayName)
-                        .tag(option)
+                    filterTab(option)
                 }
             }
-            .pickerStyle(.segmented)
-            .frame(width: 390)
+            .padding(3)
+            .background {
+                Capsule()
+                    .fill(.ultraThinMaterial)
+                    .overlay {
+                        Capsule()
+                            .fill(Color.white.opacity(0.06))
+                    }
+                    .overlay {
+                        Capsule()
+                            .stroke(Color.white.opacity(0.16), lineWidth: 1)
+                    }
+            }
+            .frame(height: 42, alignment: .leading)
 
+            searchControl
+        }
+        .padding(.horizontal, 5)
+        .padding(.vertical, 5)
+        .background {
+            LiquidGlassFilterBarBackground()
+        }
+        .shadow(color: Color.black.opacity(0.17), radius: 16, x: 0, y: 7)
+        .shadow(color: LibraryHomeDesignToken.shadowElevated.opacity(0.28), radius: 14, x: 0, y: 6)
+        .shadow(color: Color.black.opacity(0.16), radius: 3, x: 0, y: 1)
+        .padding(.horizontal, 20)
+        .padding(.top, 8)
+        .padding(.bottom, 16)
+        .animation(filterBarAnimation, value: filter)
+        .animation(filterBarAnimation, value: isSearchExpanded)
+    }
+
+    private var filterBarAccent: Color {
+        LibraryHomeDesignToken.accent
+    }
+
+    private var filterBarAnimation: Animation {
+        .snappy(duration: 0.26, extraBounce: 0.03)
+    }
+
+    private var pageTransitionAnimation: Animation {
+        .spring(response: 0.36, dampingFraction: 0.88, blendDuration: 0.04)
+    }
+
+    private var detailTransitionAnimation: Animation {
+        .spring(response: 0.30, dampingFraction: 0.90, blendDuration: 0.04)
+    }
+
+    private var filterContentTransition: AnyTransition {
+        let insertion: Edge = filterSlideDirection == .forward ? .trailing : .leading
+        let removal: Edge = filterSlideDirection == .forward ? .leading : .trailing
+        return .asymmetric(
+            insertion: .move(edge: insertion).combined(with: .opacity),
+            removal: .move(edge: removal).combined(with: .opacity)
+        )
+    }
+
+    @ViewBuilder
+    private var searchControl: some View {
+        if isSearchExpanded {
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(LibraryHomeDesignToken.textTertiary)
+                    .foregroundStyle(filterBarAccent)
+
                 TextField("按歌手、专辑、路径或标签名筛选", text: $query)
                     .textFieldStyle(.plain)
                     .font(.callout)
                     .foregroundStyle(LibraryHomeDesignToken.textPrimary)
                     .focused($isQueryFocused)
             }
-            .padding(.horizontal, 10)
-            .frame(height: 32)
-            .background(LibraryHomeDesignToken.bgTertiary, in: RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusSm))
+            .padding(.leading, 12)
+            .padding(.trailing, 16)
+            .frame(width: 320, height: 36)
+            .background {
+                searchControlBackground(isActive: true)
+            }
+            .transition(.scale(scale: 0.92, anchor: .trailing).combined(with: .opacity))
+        } else {
+            Button {
+                expandSearch()
+            } label: {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(query.isEmpty ? Color.white.opacity(0.88) : Color.white)
+                    .frame(width: 36, height: 36)
+                    .background {
+                        searchControlBackground(isActive: !query.isEmpty)
+                    }
+            }
+            .buttonStyle(.plain)
+            .contentShape(Circle())
+            .help(query.isEmpty ? "筛选搜索" : "正在使用搜索筛选，点击展开")
+            .transition(.scale(scale: 0.88, anchor: .trailing).combined(with: .opacity))
+        }
+    }
+
+    private func searchControlBackground(isActive: Bool) -> some View {
+        Capsule()
+            .fill(.ultraThinMaterial)
             .overlay {
-                RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusSm)
-                    .stroke(isQueryFocused ? LibraryHomeDesignToken.accent : LibraryHomeDesignToken.border)
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                (isActive ? filterBarAccent : Color.white).opacity(isActive ? 0.34 : 0.08),
+                                Color.white.opacity(isActive ? 0.08 : 0.03)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+            }
+            .overlay {
+                Capsule()
+                    .stroke(
+                        isActive ? Color.white.opacity(0.34) : Color.white.opacity(0.14),
+                        lineWidth: 1
+                    )
+            }
+            .shadow(color: isActive ? Color.black.opacity(0.22) : Color.black.opacity(0.14), radius: 7, x: 0, y: 2)
+    }
+
+    private func filterTab(_ option: AlbumScanResultFilter) -> some View {
+        let isSelected = filter == option
+        let isHovered = hoveredFilter == option
+        return Button {
+            selectFilter(option)
+        } label: {
+            Text(option.displayName)
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+                .foregroundStyle(isSelected ? Color.white : Color.white.opacity(0.66))
+                .frame(width: 74, height: 36)
+                .background {
+                    ZStack {
+                        if isHovered {
+                            hoveredFilterTabShadow
+                        }
+
+                        if isHovered && !isSelected {
+                            hoveredFilterTabBackground
+                        }
+
+                        if isSelected {
+                            selectedFilterTabBackground
+                                .matchedGeometryEffect(id: "selectedFilterTab", in: filterSelectionNamespace)
+                        }
+                    }
+                }
+                .offset(y: isHovered ? -1 : 0)
+        }
+        .buttonStyle(.plain)
+        .contentShape(Capsule())
+        .onHover { isHovering in
+            withAnimation(filterBarAnimation) {
+                hoveredFilter = isHovering ? option : nil
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
-        .overlay(alignment: .bottom) {
-            LibraryDividerLine()
+    }
+
+    private var selectedFilterTabBackground: some View {
+        ZStack {
+            Capsule()
+                .fill(filterBarAccent.opacity(0.94))
+
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.34),
+                            filterBarAccent.opacity(0.26),
+                            Color.black.opacity(0.16)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+
+            Capsule()
+                .inset(by: 1)
+                .stroke(Color.white.opacity(0.38), lineWidth: 1)
+
+            Capsule()
+                .inset(by: 4)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.18),
+                            Color.clear
+                        ],
+                        startPoint: .top,
+                        endPoint: .center
+                    )
+                )
+        }
+        .shadow(color: Color.black.opacity(0.24), radius: 4, x: 0, y: 1)
+        .shadow(color: Color.black.opacity(0.14), radius: 2, x: 0, y: 1)
+    }
+
+    private var hoveredFilterTabBackground: some View {
+        Capsule()
+            .fill(Color.white.opacity(0.08))
+            .overlay {
+                Capsule()
+                    .stroke(Color.white.opacity(0.16), lineWidth: 1)
+            }
+    }
+
+    private var hoveredFilterTabShadow: some View {
+        Capsule()
+            .fill(Color.white.opacity(0.01))
+            .shadow(color: Color.black.opacity(0.30), radius: 6, x: 0, y: 2)
+            .shadow(color: Color.black.opacity(0.16), radius: 2, x: 0, y: 1)
+    }
+
+    private func selectFilter(_ option: AlbumScanResultFilter) {
+        let nextDirection = filterDirection(from: filter, to: option)
+        withAnimation(pageTransitionAnimation) {
+            filterSlideDirection = nextDirection
+            filter = option
+            isSearchExpanded = false
+            if option != .singleFileUnsplit {
+                isUnsplitSelectionMode = false
+                unsplitSelection.clear()
+            }
+        }
+        isQueryFocused = false
+    }
+
+    private func filterDirection(
+        from current: AlbumScanResultFilter,
+        to next: AlbumScanResultFilter
+    ) -> FilterSlideDirection {
+        let filters = AlbumScanResultFilter.allCases
+        let currentIndex = filters.firstIndex(of: current) ?? 0
+        let nextIndex = filters.firstIndex(of: next) ?? currentIndex
+        return nextIndex >= currentIndex ? .forward : .backward
+    }
+
+    private func expandSearch() {
+        withAnimation(filterBarAnimation) {
+            isSearchExpanded = true
+        }
+        DispatchQueue.main.async {
+            isQueryFocused = true
+        }
+    }
+
+    private func scheduleQueryDebounce(_ value: String) {
+        queryDebounceTask?.cancel()
+        queryDebounceTask = Task { @MainActor in
+            do {
+                try await Task.sleep(nanoseconds: 180_000_000)
+            } catch {
+                return
+            }
+            debouncedQuery = value
         }
     }
 
@@ -179,16 +556,36 @@ struct LibraryScanSummaryView: View {
                         displayAlbumName: appModel.displayAlbumName(for: album),
                         displayArtistName: appModel.displayArtistName(for: album),
                         hasEnhancedAlbumName: appModel.hasEnhancedAlbumName(for: album),
-                        coverWriteMessage: appModel.coverWriteMessage(for: album.id)
+                        albumNameEnhancementState: appModel.albumNameEnhancementState(forAlbumID: album.id),
+                        coverWriteMessage: appModel.coverWriteMessage(for: album.id),
+                        isSelectionEnabled: filter == .singleFileUnsplit,
+                        isSelectionMode: isUnsplitSelectionMode,
+                        isSelected: unsplitSelection.selectedAlbumIDs.contains(album.id)
                     ) {
-                        openAlbumDetail(albumID: album.id, pendingCoverURL: nil)
+                        if isUnsplitSelectionMode, filter == .singleFileUnsplit {
+                            unsplitSelection.toggle(album.id)
+                        } else {
+                            openAlbumDetail(albumID: album.id, pendingCoverURL: nil)
+                        }
                     } onAcceptedCoverDrop: {
                         openAlbumDetail(albumID: album.id, pendingCoverURL: nil)
+                    } onToggleSelection: {
+                        isUnsplitSelectionMode = true
+                        unsplitSelection.toggle(album.id)
+                    } onSelectAllUnsplit: {
+                        isUnsplitSelectionMode = true
+                        unsplitSelection.selectAllSplitCandidates(in: albums)
+                    } onSplitWithXLD: {
+                        let selectedIDs = unsplitSelection.selectedAlbumIDs
+                        splitUnsplitAlbumsWithXLD(
+                            selectedIDs.contains(album.id) && !selectedIDs.isEmpty ? selectedIDs : Set([album.id])
+                        )
                     }
                 }
             }
             .padding(.horizontal, 20)
-            .padding(.vertical, 16)
+            .padding(.top, 16)
+            .padding(.bottom, 96)
         }
         .frame(minHeight: 320, maxHeight: .infinity)
     }
@@ -213,24 +610,24 @@ struct LibraryScanSummaryView: View {
             }
             .frame(maxHeight: filter == .looseAudio ? 360 : 120)
         }
-        .padding(20)
+        .padding(.horizontal, 20)
+        .padding(.top, 20)
+        .padding(.bottom, 112)
     }
 
-    private func statItem(title: String, value: Int, valueColor: Color) -> some View {
-        HStack(spacing: 5) {
-            Text(value, format: .number)
-                .font(.callout.bold())
-                .foregroundStyle(valueColor)
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(LibraryHomeDesignToken.textTertiary)
+    private var emptyAlbumStateTitle: String {
+        switch filter {
+        case .singleFileUnsplit:
+            "没有未分轨专辑。"
+        case .metadataReadFailed:
+            "没有标签异常专辑。"
+        case .trackNamedAudioFiles:
+            "没有 track 音轨专辑。"
+        case .nameEnhancementFailed:
+            "没有解析失败的专辑。"
+        default:
+            "没有符合筛选条件的专辑。"
         }
-    }
-
-    private var statDivider: some View {
-        Rectangle()
-            .fill(LibraryHomeDesignToken.borderStrong)
-            .frame(width: 1, height: 12)
     }
 
     private func emptyState(_ title: String, systemImage: String) -> some View {
@@ -251,11 +648,15 @@ struct LibraryScanSummaryView: View {
         } else {
             appModel.cancelPendingCoverImage(forAlbumID: albumID)
         }
-        isShowingAlbumDetail = true
+        withAnimation(detailTransitionAnimation) {
+            isShowingAlbumDetail = true
+        }
     }
 
     private func closeAlbumDetail() {
-        isShowingAlbumDetail = false
+        withAnimation(detailTransitionAnimation) {
+            isShowingAlbumDetail = false
+        }
         clearSelectedAlbumDetail()
     }
 
@@ -265,6 +666,92 @@ struct LibraryScanSummaryView: View {
         }
         selectedAlbumID = nil
     }
+
+    private func splitUnsplitAlbumsWithXLD(_ albumIDs: Set<AlbumScanRecord.ID>) {
+        let targets = albumIDs.compactMap { albumID -> (AlbumScanRecord.ID, CueSheetRecord.ID)? in
+            guard let album = appModel.albumInSelectedLibrary(id: albumID),
+                  UnsplitAlbumSelection.canSplitWithXLD(album),
+                  let cueSheet = album.cueSheets.first else {
+                return nil
+            }
+            return (album.id, cueSheet.id)
+        }
+
+        Task {
+            for target in targets {
+                await appModel.splitCueSheetWithXLD(albumID: target.0, cueSheetID: target.1)
+            }
+        }
+    }
+}
+
+private struct SummaryStatText: View {
+    let title: String
+    let value: Int
+    let valueColor: Color
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(LibraryHomeDesignToken.textTertiary)
+                .lineLimit(1)
+
+            Text(value, format: .number)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(valueColor)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct LiquidGlassFilterBarBackground: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(.ultraThinMaterial)
+
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.20),
+                            LibraryHomeDesignToken.accent.opacity(0.08),
+                            Color.white.opacity(0.05)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            LibraryHomeDesignToken.accent.opacity(0.20),
+                            Color.clear
+                        ],
+                        center: .topTrailing,
+                        startRadius: 8,
+                        endRadius: 180
+                    )
+                )
+
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .inset(by: 4)
+                .stroke(Color.white.opacity(0.12), lineWidth: 1)
+
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .stroke(Color.white.opacity(0.26), lineWidth: 1)
+
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .stroke(LibraryHomeDesignToken.accent.opacity(0.16), lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+    }
 }
 
 private struct AlbumCoverCard: View {
@@ -273,9 +760,16 @@ private struct AlbumCoverCard: View {
     let displayAlbumName: String
     let displayArtistName: String
     let hasEnhancedAlbumName: Bool
+    let albumNameEnhancementState: AlbumNameEnhancementAlbumState?
     let coverWriteMessage: String?
+    let isSelectionEnabled: Bool
+    let isSelectionMode: Bool
+    let isSelected: Bool
     let onOpen: () -> Void
     let onAcceptedCoverDrop: () -> Void
+    let onToggleSelection: () -> Void
+    let onSelectAllUnsplit: () -> Void
+    let onSplitWithXLD: () -> Void
 
     @State private var isDropTargeted = false
     @State private var isHovered = false
@@ -298,6 +792,13 @@ private struct AlbumCoverCard: View {
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(LibraryHomeDesignToken.textTertiary)
                                 .help("名称已由 Ollama 增强")
+                        }
+
+                        if let message = albumNameEnhancementState?.lastErrorMessage {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(LibraryHomeDesignToken.warning)
+                                .help("Ollama 解析失败：\(message)")
                         }
                     }
 
@@ -344,7 +845,12 @@ private struct AlbumCoverCard: View {
         .frame(width: 168)
         .background(cardBackground, in: RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusLg))
         .clipShape(RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusLg))
-        .shadow(color: LibraryHomeDesignToken.shadowCard, radius: 8, y: 2)
+        .scaleEffect(isHovered ? 1.018 : 1)
+        .shadow(
+            color: isHovered ? Color.black.opacity(0.38) : LibraryHomeDesignToken.shadowCard,
+            radius: isHovered ? 11 : 8,
+            y: isHovered ? 4 : 2
+        )
         .overlay {
             RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusLg)
                 .stroke(
@@ -356,7 +862,30 @@ private struct AlbumCoverCard: View {
         }
         .contentShape(RoundedRectangle(cornerRadius: 12))
         .help("点击查看专辑详情")
+        .animation(.snappy(duration: 0.18, extraBounce: 0.02), value: isHovered)
         .onHover { isHovered = $0 }
+        .contextMenu {
+            if isSelectionEnabled {
+                Button {
+                    onToggleSelection()
+                } label: {
+                    Label(isSelected ? "取消选择" : "选择", systemImage: isSelected ? "minus.circle" : "checkmark.circle")
+                }
+
+                Button {
+                    onSelectAllUnsplit()
+                } label: {
+                    Label("全选未分轨", systemImage: "checklist")
+                }
+
+                Button {
+                    onSplitWithXLD()
+                } label: {
+                    Label("用 XLD 分轨", systemImage: "waveform")
+                }
+                .disabled(!UnsplitAlbumSelection.canSplitWithXLD(album) || appModel.isSplittingCueSheet(album.id))
+            }
+        }
         .onDrop(
             of: CoverDropReceiver.typeIdentifiers,
             isTargeted: $isDropTargeted
@@ -384,6 +913,20 @@ private struct AlbumCoverCard: View {
         .overlay(alignment: .topLeading) {
             statusBadge
                 .padding(6)
+        }
+        .overlay(alignment: .topTrailing) {
+            if isSelectionEnabled && (isSelectionMode || isSelected) {
+                Button(action: onToggleSelection) {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(isSelected ? LibraryHomeDesignToken.accent : Color.white.opacity(0.82))
+                        .frame(width: 26, height: 26)
+                        .background(.ultraThinMaterial, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .padding(8)
+                .help(isSelected ? "取消选择" : "选择")
+            }
         }
         .overlay(alignment: .bottomTrailing) {
             if album.needsAttention {
@@ -591,6 +1134,14 @@ private struct AlbumDetailSheet: View {
                                             foreground: LibraryHomeDesignToken.accent,
                                             background: LibraryHomeDesignToken.accentBg
                                         )
+                                        if !album.cueSheets.isEmpty {
+                                            LibraryStatusPill(
+                                                title: "\(album.cueSheets.count) 个 CUE",
+                                                systemImage: "doc.text",
+                                                foreground: LibraryHomeDesignToken.warning,
+                                                background: LibraryHomeDesignToken.warningBg
+                                            )
+                                        }
                                         LibraryStatusPill(
                                             title: album.displayedCover?.source.displayName ?? "缺封面",
                                             systemImage: album.displayedCover == nil ? "photo.badge.exclamationmark" : "photo",
@@ -622,6 +1173,14 @@ private struct AlbumDetailSheet: View {
                                 Label(message, systemImage: "checkmark.circle.fill")
                                     .font(.callout.weight(.medium))
                                     .foregroundStyle(LibraryHomeDesignToken.success)
+                            }
+
+                            if let message = appModel.albumNameEnhancementState(forAlbumID: album.id)?.lastErrorMessage {
+                                Label("Ollama 解析失败，已回退原始名称：\(message)", systemImage: "exclamationmark.triangle.fill")
+                                    .font(.callout.weight(.medium))
+                                    .foregroundStyle(LibraryHomeDesignToken.warning)
+                                    .lineLimit(2)
+                                    .help(message)
                             }
 
                             VStack(alignment: .leading, spacing: 8) {
@@ -656,44 +1215,73 @@ private struct AlbumDetailSheet: View {
                     }
                     .padding(24)
 
+                    cueSheetList(for: album)
                     trackList(for: album)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxHeight: .infinity)
 
-            HStack(spacing: 12) {
-                Button {
-                    NSWorkspace.shared.activateFileViewerSelecting([album.folderURL])
-                } label: {
-                    Label("在 Finder 中显示", systemImage: "folder")
+            VStack(alignment: .leading, spacing: 8) {
+                if let message = appModel.albumFolderOpenMessage(forAlbumID: album.id) {
+                    Label(message, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(LibraryHomeDesignToken.warning)
+                        .lineLimit(2)
                 }
-                .buttonStyle(.coverDropSubtle)
-
-                Spacer()
-
-                Button {
-                    onClose()
-                } label: {
-                    Label("返回封面墙", systemImage: "arrow.left")
+                if let message = appModel.cueSheetSplitMessage(forAlbumID: album.id) {
+                    Label(
+                        message,
+                        systemImage: message.hasPrefix("已在 XLD 中打开") ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+                    )
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(message.hasPrefix("已在 XLD 中打开") ? LibraryHomeDesignToken.success : LibraryHomeDesignToken.warning)
+                    .lineLimit(2)
                 }
-                .buttonStyle(.coverDropSecondary(height: 34))
 
-                Button {
-                    savePendingCover()
-                } label: {
-                    if appModel.isSavingCoverImage(for: album.id) {
-                        Label("保存中...", systemImage: "hourglass")
-                    } else {
-                        Text("保存封面")
+                HStack(spacing: 12) {
+                    Button {
+                        FinderAlbumFolderOpenDiagnostics.log(
+                            "ui.buttonTapped albumID=\(album.id) folder=\(album.folderURL.path)"
+                        )
+                        Task {
+                            await appModel.openAlbumFolderInFinder(albumID: album.id)
+                        }
+                    } label: {
+                        if appModel.isOpeningAlbumFolder(album.id) {
+                            Label("打开中...", systemImage: "hourglass")
+                        } else {
+                            Label("在 Finder 中显示", systemImage: "folder")
+                        }
                     }
+                    .buttonStyle(.coverDropSubtle)
+                    .disabled(appModel.isOpeningAlbumFolder(album.id))
+
+                    Spacer()
+
+                    Button {
+                        onClose()
+                    } label: {
+                        Label("返回封面墙", systemImage: "arrow.left")
+                    }
+                    .buttonStyle(.coverDropSecondary(height: 34))
+
+                    Button {
+                        savePendingCover()
+                    } label: {
+                        if appModel.isSavingCoverImage(for: album.id) {
+                            Label("保存中...", systemImage: "hourglass")
+                        } else {
+                            Text("保存封面")
+                        }
+                    }
+                    .buttonStyle(.coverDropPrimary(height: 34))
+                    .disabled(
+                        appModel.pendingCoverURL(for: album.id) == nil
+                        || appModel.isSavingCoverImage(for: album.id)
+                    )
+                    .keyboardShortcut(.defaultAction)
                 }
-                .buttonStyle(.coverDropPrimary(height: 34))
-                .disabled(
-                    appModel.pendingCoverURL(for: album.id) == nil
-                    || appModel.isSavingCoverImage(for: album.id)
-                )
-                .keyboardShortcut(.defaultAction)
             }
             .padding(.horizontal, 24)
             .padding(.vertical, 16)
@@ -703,6 +1291,79 @@ private struct AlbumDetailSheet: View {
                     .fill(LibraryHomeDesignToken.borderStrong)
                     .frame(height: 1)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func cueSheetList(for album: AlbumScanRecord) -> some View {
+        if !album.cueSheets.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("CUE 文件")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(LibraryHomeDesignToken.textTertiary)
+                    .tracking(0.5)
+                    .textCase(.uppercase)
+                    .padding(.leading, 42)
+
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(album.cueSheets) { cueSheet in
+                        cueSheetRow(cueSheet, album: album)
+                    }
+                }
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 12)
+            .overlay(alignment: .top) {
+                LibraryDividerLine()
+            }
+        }
+    }
+
+    private func cueSheetRow(_ cueSheet: CueSheetRecord, album: AlbumScanRecord) -> some View {
+        let canSplit = isSingleImageCueSplitCandidate(album)
+        return HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "doc.text")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(canSplit ? LibraryHomeDesignToken.warning : LibraryHomeDesignToken.textTertiary)
+                .frame(width: 32, height: 32)
+                .background(LibraryHomeDesignToken.bgElevated, in: RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusSm))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(URL(fileURLWithPath: cueSheet.relativePath).lastPathComponent)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(LibraryHomeDesignToken.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Text(canSplit ? "单整轨分轨文件" : "关联 CUE 文件")
+                    .font(.system(size: 11))
+                    .foregroundStyle(LibraryHomeDesignToken.textTertiary)
+                    .lineLimit(1)
+                    .help(cueSheet.relativePath)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if appModel.isSplittingCueSheet(album.id) {
+                Label("打开中...", systemImage: "hourglass")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(LibraryHomeDesignToken.warning)
+            } else if canSplit {
+                Text("XLD")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(LibraryHomeDesignToken.warning)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
+        .background(LibraryHomeDesignToken.bgTertiary, in: RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusSm))
+        .padding(.bottom, 6)
+        .contextMenu {
+            Button {
+                splitCueSheet(cueSheet, for: album)
+            } label: {
+                Label("用 XLD 分轨", systemImage: "waveform")
+            }
+            .disabled(!canSplit || appModel.isSplittingCueSheet(album.id))
         }
     }
 
@@ -881,6 +1542,20 @@ private struct AlbumDetailSheet: View {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(searchKeyword(for: album), forType: .string)
     }
+
+    private func splitCueSheet(_ cueSheet: CueSheetRecord, for album: AlbumScanRecord) {
+        Task {
+            await appModel.splitCueSheetWithXLD(albumID: album.id, cueSheetID: cueSheet.id)
+        }
+    }
+
+    private func isSingleImageCueSplitCandidate(_ album: AlbumScanRecord) -> Bool {
+        album.audioFiles.count == 1
+            && album.issues.contains { issue in
+                if case .singleFileNeedsConfirmation(let hasCue) = issue { return hasCue }
+                return false
+            }
+    }
 }
 
 private struct CoverSearchSheet: View {
@@ -894,6 +1569,11 @@ private struct CoverSearchSheet: View {
     @State private var capturedWebImageURL: URL?
     @State private var capturedWebImageAt = Date.distantPast
     @State private var reloadID = UUID()
+    @State private var aggregateResults: [CoverSearchResult] = []
+    @State private var aggregateSearchErrorMessage: String?
+    @State private var isLoadingAggregateSearch = false
+    @State private var aggregateReloadID = UUID()
+    @State private var selectedAggregateCountryCode = "CN"
 
     private let sheetSize = CGSize(width: 1100, height: 700)
 
@@ -909,9 +1589,18 @@ private struct CoverSearchSheet: View {
         selectedSource.url(for: keyword)
     }
 
+    private var aggregateSearchTaskKey: String {
+        [
+            selectedSourceID,
+            keyword,
+            selectedAggregateCountryCode,
+            aggregateReloadID.uuidString
+        ].joined(separator: "|")
+    }
+
     var body: some View {
         HStack(spacing: 0) {
-            browserArea
+            searchArea
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             sidePanel
@@ -929,9 +1618,21 @@ private struct CoverSearchSheet: View {
         .onChange(of: searchURL) {
             clearCapturedWebImage()
         }
+        .task(id: aggregateSearchTaskKey) {
+            await loadAggregateSearchResultsIfNeeded()
+        }
     }
 
-    private var browserArea: some View {
+    @ViewBuilder
+    private var searchArea: some View {
+        if selectedSource.kind == .aggregate {
+            aggregateSearchArea
+        } else {
+            webSearchArea
+        }
+    }
+
+    private var webSearchArea: some View {
         VStack(spacing: 0) {
             urlBar
 
@@ -961,6 +1662,148 @@ private struct CoverSearchSheet: View {
                 }
             }
         }
+    }
+
+    private var aggregateSearchArea: some View {
+        VStack(spacing: 0) {
+            aggregateSearchToolbar
+
+            ZStack {
+                aggregateSearchContent
+
+                if isLoadingAggregateSearch && !aggregateResults.isEmpty {
+                    ProgressView()
+                        .controlSize(.small)
+                        .padding(10)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusMd))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        .padding(16)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(LibraryHomeDesignToken.bgPrimary)
+        }
+    }
+
+    private var aggregateSearchToolbar: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkle.magnifyingglass")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(LibraryHomeDesignToken.accent)
+                Text("聚合搜索")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(LibraryHomeDesignToken.textPrimary)
+            }
+
+            Text(keyword)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(LibraryHomeDesignToken.textSecondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.horizontal, 10)
+                .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+                .background(LibraryHomeDesignToken.bgPrimary, in: RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusSm))
+                .help(keyword)
+
+            HStack(spacing: 6) {
+                Image(systemName: "globe.asia.australia")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("中国大陆 CN")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundStyle(LibraryHomeDesignToken.textSecondary)
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(LibraryHomeDesignToken.bgPrimary, in: RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusSm))
+            .help("第一版仅启用中国大陆地区，后续可扩展更多地区。")
+
+            Button {
+                aggregateReloadID = UUID()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(LibraryHomeDesignToken.textSecondary)
+            .disabled(isLoadingAggregateSearch)
+            .help("刷新聚合搜索结果")
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 40)
+        .background(LibraryHomeDesignToken.bgTertiary)
+        .overlay(alignment: .bottom) {
+            LibraryDividerLine()
+        }
+    }
+
+    @ViewBuilder
+    private var aggregateSearchContent: some View {
+        if isLoadingAggregateSearch && aggregateResults.isEmpty {
+            VStack(spacing: 12) {
+                ProgressView()
+                    .controlSize(.regular)
+                Text("正在搜索封面...")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(LibraryHomeDesignToken.textSecondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let aggregateSearchErrorMessage {
+            aggregateSearchError(aggregateSearchErrorMessage)
+        } else if aggregateResults.isEmpty {
+            ContentUnavailableView {
+                Label("没有找到封面", systemImage: "photo.on.rectangle.angled")
+            } description: {
+                Text("可以换一个搜索词，或切换到右侧的网页搜索源。")
+            } actions: {
+                Button {
+                    aggregateReloadID = UUID()
+                } label: {
+                    Label("重试", systemImage: "arrow.clockwise")
+                }
+            }
+            .foregroundStyle(LibraryHomeDesignToken.textSecondary)
+        } else {
+            aggregateResultsGrid
+        }
+    }
+
+    private var aggregateResultsGrid: some View {
+        ScrollView {
+            LazyVGrid(
+                columns: [
+                    GridItem(.adaptive(minimum: 170, maximum: 230), spacing: 16)
+                ],
+                alignment: .leading,
+                spacing: 16
+            ) {
+                ForEach(aggregateResults) { result in
+                    AggregateCoverResultCard(
+                        result: result,
+                        onDragStarted: { imageURL in
+                            cacheCapturedWebImage(imageURL)
+                        }
+                    )
+                }
+            }
+            .padding(20)
+        }
+    }
+
+    private func aggregateSearchError(_ message: String) -> some View {
+        ContentUnavailableView {
+            Label("聚合搜索失败", systemImage: "network.slash")
+        } description: {
+            Text(message)
+        } actions: {
+            Button {
+                aggregateReloadID = UUID()
+            } label: {
+                Label("重试", systemImage: "arrow.clockwise")
+            }
+        }
+        .padding()
+        .foregroundStyle(LibraryHomeDesignToken.textSecondary)
     }
 
     private var urlBar: some View {
@@ -1187,6 +2030,13 @@ private struct CoverSearchSheet: View {
                 isTargeted: $isDropTargeted
             ) { providers in
                 let fallbackRemoteURL = freshCapturedWebImageURL()
+                if let fallbackRemoteURL {
+                    CoverDropDebugLog.write(
+                        "封面拖拽：右侧拖入区域取得备用图片 URL：\(fallbackRemoteURL.absoluteString)"
+                    )
+                } else {
+                    CoverDropDebugLog.write("封面拖拽：右侧拖入区域没有备用图片 URL")
+                }
                 let didAccept = CoverDropReceiver.receive(
                     providers,
                     albumID: album.id,
@@ -1213,25 +2063,30 @@ private struct CoverSearchSheet: View {
 
     private var sourceTabs: some View {
         VStack(spacing: 12) {
-            HStack(spacing: 0) {
-                ForEach(searchConfiguration.enabledSources) { source in
-                    Button {
-                        selectedSourceID = source.id
-                    } label: {
-                        Text(source.displayName)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(source.id == selectedSourceID ? LibraryHomeDesignToken.accent : LibraryHomeDesignToken.textSecondary)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
-                            .overlay(alignment: .bottom) {
-                                Rectangle()
-                                    .fill(source.id == selectedSourceID ? LibraryHomeDesignToken.accent : .clear)
-                                    .frame(height: 2)
-                            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 0) {
+                    ForEach(searchConfiguration.enabledSources) { source in
+                        Button {
+                            selectedSourceID = source.id
+                        } label: {
+                            Text(source.displayName)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(source.id == selectedSourceID ? LibraryHomeDesignToken.accent : LibraryHomeDesignToken.textSecondary)
+                                .lineLimit(1)
+                                .frame(minWidth: 58)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 8)
+                                .overlay(alignment: .bottom) {
+                                    Rectangle()
+                                        .fill(source.id == selectedSourceID ? LibraryHomeDesignToken.accent : .clear)
+                                        .frame(height: 2)
+                                }
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .overlay(alignment: .bottom) {
                 LibraryDividerLine()
             }
@@ -1303,13 +2158,196 @@ private struct CoverSearchSheet: View {
         return capturedWebImageURL
     }
 
+    @MainActor
+    private func loadAggregateSearchResultsIfNeeded() async {
+        guard selectedSource.kind == .aggregate else { return }
+
+        let trimmedKeyword = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKeyword.isEmpty else {
+            aggregateResults = []
+            aggregateSearchErrorMessage = "搜索词为空，无法执行聚合搜索。"
+            isLoadingAggregateSearch = false
+            return
+        }
+
+        isLoadingAggregateSearch = true
+        aggregateSearchErrorMessage = nil
+
+        do {
+            let parameters = CoverSearchParameters(countryCode: selectedAggregateCountryCode)
+            let results = try await appModel.environment.coverSearchClient.searchCovers(
+                keyword: trimmedKeyword,
+                parameters: parameters
+            )
+
+            guard !Task.isCancelled else { return }
+            aggregateResults = results
+            aggregateSearchErrorMessage = nil
+            isLoadingAggregateSearch = false
+        } catch {
+            guard !Task.isCancelled else { return }
+            aggregateResults = []
+            aggregateSearchErrorMessage = displayMessage(for: error)
+            isLoadingAggregateSearch = false
+        }
+    }
+
+    private func displayMessage(for error: Error) -> String {
+        if let localizedError = error as? LocalizedError,
+           let errorDescription = localizedError.errorDescription,
+           !errorDescription.isEmpty {
+            return errorDescription
+        }
+
+        let message = error.localizedDescription
+        return message.isEmpty ? "聚合搜索失败，请稍后重试。" : message
+    }
+
     private func clearCapturedWebImage() {
         capturedWebImageURL = nil
         capturedWebImageAt = .distantPast
     }
 }
 
-private enum CoverDropReceiver {
+private struct AggregateCoverResultCard: View {
+    let result: CoverSearchResult
+    let onDragStarted: (URL) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            aggregateCoverImage
+                .overlay(alignment: .topLeading) {
+                    sourceBadge
+                        .padding(8)
+                }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(result.albumName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(LibraryHomeDesignToken.textPrimary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(result.albumName)
+
+                Text(result.artistName)
+                    .font(.system(size: 12))
+                    .foregroundStyle(LibraryHomeDesignToken.textSecondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(result.artistName)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(10)
+        .background(LibraryHomeDesignToken.bgSecondary, in: RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusMd))
+        .overlay {
+            RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusMd)
+                .stroke(LibraryHomeDesignToken.border)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusMd))
+        .onDrag {
+            onDragStarted(result.imageURL)
+            CoverDropDebugLog.write(
+                "封面拖拽：聚合搜索拖拽开始，已缓存备用图片 URL：\(result.imageURL.absoluteString)"
+            )
+            let provider = CoverSearchResultDragItemProvider.provider(for: result)
+            return provider
+        }
+        .help("拖到右侧封面方块暂存封面")
+    }
+
+    private var aggregateCoverImage: some View {
+        RemoteCoverPreviewImage(url: RemoteCoverPreviewLoader.previewURL(for: result))
+        .aspectRatio(1, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusSm))
+        .overlay {
+            RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusSm)
+                .stroke(LibraryHomeDesignToken.borderStrong)
+        }
+    }
+
+    private var sourceBadge: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "music.note")
+                .font(.system(size: 9, weight: .semibold))
+            Text(result.sourceName)
+                .font(.system(size: 10, weight: .semibold))
+        }
+        .foregroundStyle(LibraryHomeDesignToken.textPrimary)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(.ultraThinMaterial, in: Capsule())
+    }
+}
+
+private struct RemoteCoverPreviewImage: View {
+    let url: URL
+
+    @State private var image: NSImage?
+    @State private var didFail = false
+
+    private var requestKey: String {
+        url.absoluteString
+    }
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(LibraryHomeDesignToken.bgTertiary)
+
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else if didFail {
+                VStack(spacing: 8) {
+                    Image(systemName: "photo")
+                        .font(.system(size: 28, weight: .regular))
+                    Text("封面加载失败")
+                        .font(.caption.weight(.medium))
+                }
+                .foregroundStyle(LibraryHomeDesignToken.textTertiary)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+            }
+        }
+        .task(id: requestKey) {
+            await loadImage()
+        }
+    }
+
+    @MainActor
+    private func loadImage() async {
+        image = nil
+        didFail = false
+
+        let loadedImage = await RemoteCoverPreviewLoader.loadImage(from: url)
+        guard !Task.isCancelled else { return }
+
+        if let loadedImage {
+            image = loadedImage
+        } else {
+            didFail = true
+        }
+    }
+}
+
+enum CoverDropReceiver {
+    private final class AcceptanceHandlerBox: @unchecked Sendable {
+        private let action: (() -> Void)?
+
+        @MainActor
+        init(action: (() -> Void)?) {
+            self.action = action
+        }
+
+        @MainActor
+        func callIfPresent() {
+            action?()
+        }
+    }
+
     private struct SendableItemProvider: @unchecked Sendable {
         nonisolated(unsafe) let value: NSItemProvider
     }
@@ -1319,7 +2357,13 @@ private enum CoverDropReceiver {
         let typeIdentifier: String
     }
 
-    static let imageTypeIdentifiers = [
+    private struct ImageDataRepresentation: @unchecked Sendable {
+        let provider: SendableItemProvider
+        let typeIdentifier: String
+        let fallbackRemoteURL: URL?
+    }
+
+    nonisolated static let imageTypeIdentifiers = [
         UTType.jpeg.identifier,
         UTType.png.identifier,
         UTType.tiff.identifier,
@@ -1327,19 +2371,19 @@ private enum CoverDropReceiver {
         UTType.image.identifier
     ]
 
-    static let urlTypeIdentifiers = [
+    nonisolated static let urlTypeIdentifiers = [
         UTType.url.identifier
     ] + textURLTypeIdentifiers + [
         UTType.fileURL.identifier
     ]
 
-    static let textURLTypeIdentifiers = [
+    nonisolated static let textURLTypeIdentifiers = [
         "public.utf8-plain-text",
         "public.plain-text",
         "public.text"
     ]
 
-    static let typeIdentifiers = imageTypeIdentifiers + urlTypeIdentifiers
+    nonisolated static let typeIdentifiers = imageTypeIdentifiers + urlTypeIdentifiers
 
     @MainActor
     static func receive(
@@ -1358,33 +2402,53 @@ private enum CoverDropReceiver {
             "封面拖拽：provider 暴露类型：\(provider.registeredTypeIdentifiers.joined(separator: ", "))"
         )
         let urlRepresentations = urlRepresentations(in: provider)
+        let acceptanceHandler = AcceptanceHandlerBox(action: onAccepted)
         CoverDropDebugLog.write(
             "封面拖拽：可用 URL representation：\(urlRepresentations.map(\.typeIdentifier).joined(separator: ", "))"
         )
 
-        if let imageTypeIdentifier = imageTypeIdentifiers.first(where: {
+        let imageFallback = imageTypeIdentifiers.first(where: {
             provider.hasItemConformingToTypeIdentifier($0)
-        }) {
-            CoverDropDebugLog.write("封面拖拽：优先读取图片 representation：\(imageTypeIdentifier)")
-            onAccepted?()
+        }).map {
+            ImageDataRepresentation(
+                provider: SendableItemProvider(value: provider),
+                typeIdentifier: $0,
+                fallbackRemoteURL: fallbackRemoteURL
+            )
+        }
+
+        if loadFirstURLIfAvailable(
+            from: urlRepresentations[...],
+            imageFallback: imageFallback,
+            fallbackRemoteURL: fallbackRemoteURL,
+            albumID: albumID,
+            appModel: appModel,
+            acceptanceHandler: acceptanceHandler
+        ) {
+            return true
+        }
+
+        if let imageFallback {
+            CoverDropDebugLog.write("封面拖拽：无可用 URL，改读图片 representation：\(imageFallback.typeIdentifier)")
             loadImageData(
-                from: provider,
-                typeIdentifier: imageTypeIdentifier,
-                urlRepresentations: urlRepresentations,
-                fallbackRemoteURL: fallbackRemoteURL,
+                from: imageFallback.provider.value,
+                typeIdentifier: imageFallback.typeIdentifier,
+                urlRepresentations: [],
+                fallbackRemoteURL: imageFallback.fallbackRemoteURL,
                 albumID: albumID,
-                appModel: appModel
+                appModel: appModel,
+                acceptanceHandler: acceptanceHandler
             )
             return true
         }
 
-        if loadFirstURLIfAvailable(
-            from: urlRepresentations,
-            fallbackRemoteURL: fallbackRemoteURL,
+        if loadFallbackRemoteURLIfAvailable(
+            fallbackRemoteURL,
             albumID: albumID,
-            appModel: appModel
+            appModel: appModel,
+            acceptanceHandler: acceptanceHandler,
+            context: "没有图片或 URL representation"
         ) {
-            onAccepted?()
             return true
         }
 
@@ -1396,10 +2460,13 @@ private enum CoverDropReceiver {
     nonisolated private static func loadURL(
         from representation: URLItemRepresentation,
         remainingRepresentations: ArraySlice<URLItemRepresentation> = [],
+        imageFallback: ImageDataRepresentation? = nil,
+        fallbackRemoteURL: URL? = nil,
         albumID: AlbumScanRecord.ID,
-        appModel: AppModel
+        appModel: AppModel,
+        acceptanceHandler: AcceptanceHandlerBox
     ) {
-        CoverDropDebugLog.write("封面拖拽：开始读取 URL representation：\(representation.typeIdentifier)")
+        CoverDropDebugLog.write("封面拖拽：尝试 URL representation：\(representation.typeIdentifier)")
         representation.provider.value.loadItem(forTypeIdentifier: representation.typeIdentifier, options: nil) { item, error in
             if let error {
                 CoverDropDebugLog.write(
@@ -1407,8 +2474,14 @@ private enum CoverDropReceiver {
                 )
                 if let url = remoteURL(from: error) {
                     CoverDropDebugLog.write("封面拖拽：从 URL representation 错误文案提取到远程 URL：\(url.absoluteString)")
-                    Task {
-                        await appModel.stageDroppedCoverURL(url, forAlbumID: albumID)
+                    Task { @MainActor in
+                        let didStage = await appModel.stageDroppedCoverURL(url, forAlbumID: albumID)
+                        if didStage {
+                            CoverDropDebugLog.write("封面拖拽：URL 错误文案提取结果暂存成功，URL=\(url.absoluteString)")
+                            acceptanceHandler.callIfPresent()
+                        } else {
+                            CoverDropDebugLog.write("封面拖拽：URL 错误文案提取结果暂存失败，URL=\(url.absoluteString)")
+                        }
                     }
                     return
                 }
@@ -1416,8 +2489,30 @@ private enum CoverDropReceiver {
                 CoverDropDebugLog.write("封面拖拽：当前 URL representation 未提取到远程 URL，尝试下一个")
                 if loadFirstURLIfAvailable(
                     from: remainingRepresentations,
+                    imageFallback: imageFallback,
+                    fallbackRemoteURL: fallbackRemoteURL,
                     albumID: albumID,
-                    appModel: appModel
+                    appModel: appModel,
+                    acceptanceHandler: acceptanceHandler
+                ) {
+                    return
+                }
+
+                if loadImageFallbackIfAvailable(
+                    imageFallback,
+                    albumID: albumID,
+                    appModel: appModel,
+                    acceptanceHandler: acceptanceHandler
+                ) {
+                    return
+                }
+
+                if loadFallbackRemoteURLIfAvailable(
+                    fallbackRemoteURL,
+                    albumID: albumID,
+                    appModel: appModel,
+                    acceptanceHandler: acceptanceHandler,
+                    context: "URL representation 全部读取失败"
                 ) {
                     return
                 }
@@ -1434,8 +2529,30 @@ private enum CoverDropReceiver {
                 )
                 if loadFirstURLIfAvailable(
                     from: remainingRepresentations,
+                    imageFallback: imageFallback,
+                    fallbackRemoteURL: fallbackRemoteURL,
                     albumID: albumID,
-                    appModel: appModel
+                    appModel: appModel,
+                    acceptanceHandler: acceptanceHandler
+                ) {
+                    return
+                }
+
+                if loadImageFallbackIfAvailable(
+                    imageFallback,
+                    albumID: albumID,
+                    appModel: appModel,
+                    acceptanceHandler: acceptanceHandler
+                ) {
+                    return
+                }
+
+                if loadFallbackRemoteURLIfAvailable(
+                    fallbackRemoteURL,
+                    albumID: albumID,
+                    appModel: appModel,
+                    acceptanceHandler: acceptanceHandler,
+                    context: "URL representation 返回对象无法识别"
                 ) {
                     return
                 }
@@ -1449,8 +2566,36 @@ private enum CoverDropReceiver {
             CoverDropDebugLog.write(
                 "封面拖拽：URL representation 读取成功，type=\(representation.typeIdentifier)，URL=\(url.absoluteString)"
             )
-            Task {
-                await appModel.stageDroppedCoverURL(url, forAlbumID: albumID)
+            Task { @MainActor in
+                let didStage = await appModel.stageDroppedCoverURL(url, forAlbumID: albumID)
+                if didStage {
+                    CoverDropDebugLog.write("封面拖拽：URL 暂存成功，URL=\(url.absoluteString)")
+                    acceptanceHandler.callIfPresent()
+                } else if loadFirstURLIfAvailable(
+                    from: remainingRepresentations,
+                    imageFallback: imageFallback,
+                    fallbackRemoteURL: fallbackRemoteURL,
+                    albumID: albumID,
+                    appModel: appModel,
+                    acceptanceHandler: acceptanceHandler
+                ) {
+                    CoverDropDebugLog.write("封面拖拽：URL 暂存失败，继续尝试下一个 URL representation")
+                } else if loadImageFallbackIfAvailable(
+                    imageFallback,
+                    albumID: albumID,
+                    appModel: appModel,
+                    acceptanceHandler: acceptanceHandler
+                ) {
+                    CoverDropDebugLog.write("封面拖拽：URL 暂存失败，改读图片 representation")
+                } else if loadFallbackRemoteURLIfAvailable(
+                    fallbackRemoteURL,
+                    albumID: albumID,
+                    appModel: appModel,
+                    acceptanceHandler: acceptanceHandler,
+                    context: "URL 暂存失败"
+                ) {
+                    CoverDropDebugLog.write("封面拖拽：URL 暂存失败，改用备用远程 URL")
+                }
             }
         }
     }
@@ -1461,7 +2606,8 @@ private enum CoverDropReceiver {
         urlRepresentations: [URLItemRepresentation],
         fallbackRemoteURL: URL?,
         albumID: AlbumScanRecord.ID,
-        appModel: AppModel
+        appModel: AppModel,
+        acceptanceHandler: AcceptanceHandlerBox
     ) {
         CoverDropDebugLog.write("封面拖拽：开始读取图片数据 representation：\(typeIdentifier)")
         provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, error in
@@ -1471,22 +2617,33 @@ private enum CoverDropReceiver {
                 )
                 if let url = remoteURL(from: error) {
                     CoverDropDebugLog.write("封面拖拽：从图片数据错误文案提取到远程 URL：\(url.absoluteString)")
-                    Task {
-                        await appModel.stageDroppedCoverURL(url, forAlbumID: albumID)
+                    Task { @MainActor in
+                        let didStage = await appModel.stageDroppedCoverURL(url, forAlbumID: albumID)
+                        if didStage {
+                            CoverDropDebugLog.write("封面拖拽：图片错误文案提取结果暂存成功，URL=\(url.absoluteString)")
+                            acceptanceHandler.callIfPresent()
+                        } else {
+                            CoverDropDebugLog.write("封面拖拽：图片错误文案提取结果暂存失败，URL=\(url.absoluteString)")
+                        }
                     }
                     return
                 }
 
                 if urlRepresentations.isEmpty {
                     CoverDropDebugLog.write(
-                        "封面拖拽：provider 无 URL representation，\(typeIdentifier) 无可用 loader；如果来自内置搜索页，将尝试使用 WKWebView 已缓存图片 URL。"
+                        "封面拖拽：provider 无声明可用 URL representation，\(typeIdentifier) 无可用 loader；开始探测 URL/文本 representation。"
                     )
                 }
 
-                if loadURLFallbackIfAvailable(
-                    from: urlRepresentations,
+                let fallbackURLRepresentations = urlRepresentations.isEmpty
+                    ? speculativeURLRepresentations(in: provider)
+                    : urlRepresentations
+                if loadFirstURLIfAvailable(
+                    from: fallbackURLRepresentations[...],
+                    fallbackRemoteURL: fallbackRemoteURL,
                     albumID: albumID,
-                    appModel: appModel
+                    appModel: appModel,
+                    acceptanceHandler: acceptanceHandler
                 ) {
                     return
                 }
@@ -1495,8 +2652,11 @@ private enum CoverDropReceiver {
                     CoverDropDebugLog.write(
                         "封面拖拽：使用 WKWebView 已缓存图片 URL 暂存：\(fallbackRemoteURL.absoluteString)"
                     )
-                    Task {
-                        await appModel.stageDroppedCoverURL(fallbackRemoteURL, forAlbumID: albumID)
+                    Task { @MainActor in
+                        let didStage = await appModel.stageDroppedCoverURL(fallbackRemoteURL, forAlbumID: albumID)
+                        if didStage {
+                            acceptanceHandler.callIfPresent()
+                        }
                     }
                     return
                 }
@@ -1509,10 +2669,15 @@ private enum CoverDropReceiver {
 
             guard let data else {
                 CoverDropDebugLog.write("封面拖拽：图片数据 representation 成功回调但 data 为 nil，type=\(typeIdentifier)")
-                if loadURLFallbackIfAvailable(
-                    from: urlRepresentations,
+                let fallbackURLRepresentations = urlRepresentations.isEmpty
+                    ? speculativeURLRepresentations(in: provider)
+                    : urlRepresentations
+                if loadFirstURLIfAvailable(
+                    from: fallbackURLRepresentations[...],
+                    fallbackRemoteURL: fallbackRemoteURL,
                     albumID: albumID,
-                    appModel: appModel
+                    appModel: appModel,
+                    acceptanceHandler: acceptanceHandler
                 ) {
                     return
                 }
@@ -1521,8 +2686,11 @@ private enum CoverDropReceiver {
                     CoverDropDebugLog.write(
                         "封面拖拽：图片数据为空，使用 WKWebView 已缓存图片 URL 暂存：\(fallbackRemoteURL.absoluteString)"
                     )
-                    Task {
-                        await appModel.stageDroppedCoverURL(fallbackRemoteURL, forAlbumID: albumID)
+                    Task { @MainActor in
+                        let didStage = await appModel.stageDroppedCoverURL(fallbackRemoteURL, forAlbumID: albumID)
+                        if didStage {
+                            acceptanceHandler.callIfPresent()
+                        }
                     }
                     return
                 }
@@ -1534,12 +2702,15 @@ private enum CoverDropReceiver {
             }
 
             CoverDropDebugLog.write("封面拖拽：图片数据 representation 读取成功，type=\(typeIdentifier)，大小=\(data.count) bytes")
-            Task {
-                await appModel.stageCoverImageData(
+            Task { @MainActor in
+                let didStage = await appModel.stageCoverImageData(
                     data,
                     suggestedExtension: suggestedExtension(for: typeIdentifier),
                     forAlbumID: albumID
                 )
+                if didStage {
+                    acceptanceHandler.callIfPresent()
+                }
             }
         }
     }
@@ -1547,51 +2718,78 @@ private enum CoverDropReceiver {
     nonisolated private static func loadURLFallbackIfAvailable(
         from representations: [URLItemRepresentation],
         albumID: AlbumScanRecord.ID,
-        appModel: AppModel
+        appModel: AppModel,
+        acceptanceHandler: AcceptanceHandlerBox
     ) -> Bool {
         loadFirstURLIfAvailable(
             from: representations[...],
             albumID: albumID,
-            appModel: appModel
+            appModel: appModel,
+            acceptanceHandler: acceptanceHandler
         )
     }
 
     nonisolated private static func loadFirstURLIfAvailable(
         from representations: ArraySlice<URLItemRepresentation>,
+        imageFallback: ImageDataRepresentation? = nil,
+        fallbackRemoteURL: URL? = nil,
         albumID: AlbumScanRecord.ID,
-        appModel: AppModel
+        appModel: AppModel,
+        acceptanceHandler: AcceptanceHandlerBox
     ) -> Bool {
         guard let representation = representations.first else { return false }
 
         loadURL(
             from: representation,
             remainingRepresentations: representations.dropFirst(),
+            imageFallback: imageFallback,
+            fallbackRemoteURL: fallbackRemoteURL,
             albumID: albumID,
-            appModel: appModel
+            appModel: appModel,
+            acceptanceHandler: acceptanceHandler
         )
         return true
     }
 
-    private static func loadFirstURLIfAvailable(
-        from representations: [URLItemRepresentation],
-        fallbackRemoteURL: URL?,
+    private static func loadImageFallbackIfAvailable(
+        _ imageFallback: ImageDataRepresentation?,
         albumID: AlbumScanRecord.ID,
-        appModel: AppModel
+        appModel: AppModel,
+        acceptanceHandler: AcceptanceHandlerBox
     ) -> Bool {
-        if loadFirstURLIfAvailable(
-            from: representations[...],
+        guard let imageFallback else { return false }
+        CoverDropDebugLog.write("封面拖拽：改读图片数据 representation：\(imageFallback.typeIdentifier)")
+        loadImageData(
+            from: imageFallback.provider.value,
+            typeIdentifier: imageFallback.typeIdentifier,
+            urlRepresentations: [],
+            fallbackRemoteURL: imageFallback.fallbackRemoteURL,
             albumID: albumID,
-            appModel: appModel
-        ) {
-            return true
-        }
+            appModel: appModel,
+            acceptanceHandler: acceptanceHandler
+        )
+        return true
+    }
 
+    private static func loadFallbackRemoteURLIfAvailable(
+        _ fallbackRemoteURL: URL?,
+        albumID: AlbumScanRecord.ID,
+        appModel: AppModel,
+        acceptanceHandler: AcceptanceHandlerBox,
+        context: String
+    ) -> Bool {
         guard let fallbackRemoteURL else { return false }
         CoverDropDebugLog.write(
-            "封面拖拽：没有 URL representation，使用 WKWebView 已缓存图片 URL 暂存：\(fallbackRemoteURL.absoluteString)"
+            "封面拖拽：\(context)，使用 WKWebView 已缓存图片 URL 暂存：\(fallbackRemoteURL.absoluteString)"
         )
-        Task {
-            await appModel.stageDroppedCoverURL(fallbackRemoteURL, forAlbumID: albumID)
+        Task { @MainActor in
+            let didStage = await appModel.stageDroppedCoverURL(fallbackRemoteURL, forAlbumID: albumID)
+            if didStage {
+                CoverDropDebugLog.write("封面拖拽：备用远程 URL 暂存成功，URL=\(fallbackRemoteURL.absoluteString)")
+                acceptanceHandler.callIfPresent()
+            } else {
+                CoverDropDebugLog.write("封面拖拽：备用远程 URL 暂存失败，URL=\(fallbackRemoteURL.absoluteString)")
+            }
         }
         return true
     }
@@ -1603,18 +2801,28 @@ private enum CoverDropReceiver {
             .map { URLItemRepresentation(provider: sendableProvider, typeIdentifier: $0) }
     }
 
+    nonisolated private static func speculativeURLRepresentations(in provider: NSItemProvider) -> [URLItemRepresentation] {
+        let sendableProvider = SendableItemProvider(value: provider)
+        CoverDropDebugLog.write(
+            "封面拖拽：探测全部 URL/文本 representation：\(urlTypeIdentifiers.joined(separator: ", "))"
+        )
+        return urlTypeIdentifiers.map {
+            URLItemRepresentation(provider: sendableProvider, typeIdentifier: $0)
+        }
+    }
+
     nonisolated private static func droppedURL(from item: NSSecureCoding?) -> URL? {
         if let url = item as? URL {
             return url
         }
 
         if let data = item as? Data {
-            if let url = URL(dataRepresentation: data, relativeTo: nil) {
-                return url
-            }
-
             if let string = String(data: data, encoding: .utf8) {
                 return URL(string: cleanedURLString(string))
+            }
+
+            if let url = URL(dataRepresentation: data, relativeTo: nil) {
+                return url
             }
         }
 
@@ -1639,7 +2847,26 @@ private enum CoverDropReceiver {
 
     nonisolated private static func debugDescription(for error: Error) -> String {
         let nsError = error as NSError
-        return "domain=\(nsError.domain)，code=\(nsError.code)，description=\(nsError.localizedDescription)"
+        return debugDescription(for: nsError, depth: 0)
+    }
+
+    nonisolated private static func debugDescription(for error: NSError, depth: Int) -> String {
+        guard depth <= 3 else {
+            return "domain=\(error.domain)，code=\(error.code)，description=\(error.localizedDescription)，userInfo=<max-depth>"
+        }
+
+        let userInfo = error.userInfo
+            .sorted { "\($0.key)" < "\($1.key)" }
+            .map { key, value in
+                if key == NSUnderlyingErrorKey,
+                   let underlying = value as? NSError {
+                    return "\(key)=\(debugDescription(for: underlying, depth: depth + 1))"
+                }
+                return "\(key)=\(String(describing: value))"
+            }
+            .joined(separator: "；")
+
+        return "domain=\(error.domain)，code=\(error.code)，description=\(error.localizedDescription)，userInfo={\(userInfo)}"
     }
 
     nonisolated private static func suggestedExtension(for typeIdentifier: String) -> String? {
@@ -1854,8 +3081,8 @@ private struct CachedCoverFillView: View {
 
     @State private var image: NSImage?
 
-    private var thumbnailIdentity: String {
-        CoverPreviewCache.thumbnailIdentity(for: url, maxPixelSize: maxPixelSize)
+    private var thumbnailRequestKey: String {
+        "\(url?.standardizedFileURL.path ?? "empty")@\(Int(maxPixelSize))"
     }
 
     var body: some View {
@@ -1879,13 +3106,13 @@ private struct CachedCoverFillView: View {
                 .background(LibraryHomeDesignToken.bgPrimary)
             }
         }
-        .task(id: thumbnailIdentity) {
-            await loadThumbnail(expectedIdentity: thumbnailIdentity)
+        .task(id: thumbnailRequestKey) {
+            await loadThumbnail(requestKey: thumbnailRequestKey)
         }
     }
 
     @MainActor
-    private func loadThumbnail(expectedIdentity: String) async {
+    private func loadThumbnail(requestKey: String) async {
         guard let url else {
             image = nil
             return
@@ -1893,15 +3120,18 @@ private struct CachedCoverFillView: View {
 
         image = nil
         let maxPixelSize = maxPixelSize
-        let loadedImage = await Task.detached(priority: .utility) {
-            CoverPreviewCache.cachedImage(for: url, maxPixelSize: maxPixelSize)
+        let loaded = await Task.detached(priority: .utility) { () -> (identity: String, image: NSImage?) in
+            let identity = CoverPreviewCache.thumbnailIdentity(for: url, maxPixelSize: maxPixelSize)
+            let image = CoverPreviewCache.cachedImage(for: url, maxPixelSize: maxPixelSize)
+            return (identity: identity, image: image)
         }.value
 
         guard !Task.isCancelled,
-              expectedIdentity == thumbnailIdentity else {
+              requestKey == thumbnailRequestKey else {
             return
         }
-        image = loadedImage
+        _ = loaded.identity
+        image = loaded.image
     }
 }
 
@@ -1913,8 +3143,8 @@ private struct CachedAlbumCoverPreview: View {
 
     @State private var image: NSImage?
 
-    private var thumbnailIdentity: String {
-        CoverPreviewCache.thumbnailIdentity(for: url, maxPixelSize: maxPixelSize)
+    private var thumbnailRequestKey: String {
+        "\(url?.standardizedFileURL.path ?? "empty")@\(Int(maxPixelSize))"
     }
 
     var body: some View {
@@ -1923,13 +3153,13 @@ private struct CachedAlbumCoverPreview: View {
             placeholderSize: placeholderSize,
             cornerRadius: cornerRadius
         )
-        .task(id: thumbnailIdentity) {
-            await loadThumbnail(expectedIdentity: thumbnailIdentity)
+        .task(id: thumbnailRequestKey) {
+            await loadThumbnail(requestKey: thumbnailRequestKey)
         }
     }
 
     @MainActor
-    private func loadThumbnail(expectedIdentity: String) async {
+    private func loadThumbnail(requestKey: String) async {
         guard let url else {
             image = nil
             return
@@ -1937,15 +3167,18 @@ private struct CachedAlbumCoverPreview: View {
 
         image = nil
         let maxPixelSize = maxPixelSize
-        let loadedImage = await Task.detached(priority: .utility) {
-            CoverPreviewCache.cachedImage(for: url, maxPixelSize: maxPixelSize)
+        let loaded = await Task.detached(priority: .utility) { () -> (identity: String, image: NSImage?) in
+            let identity = CoverPreviewCache.thumbnailIdentity(for: url, maxPixelSize: maxPixelSize)
+            let image = CoverPreviewCache.cachedImage(for: url, maxPixelSize: maxPixelSize)
+            return (identity: identity, image: image)
         }.value
 
         guard !Task.isCancelled,
-              expectedIdentity == thumbnailIdentity else {
+              requestKey == thumbnailRequestKey else {
             return
         }
-        image = loadedImage
+        _ = loaded.identity
+        image = loaded.image
     }
 }
 

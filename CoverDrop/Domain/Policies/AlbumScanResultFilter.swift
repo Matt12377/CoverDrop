@@ -3,8 +3,11 @@ import Foundation
 enum AlbumScanResultFilter: String, CaseIterable, Identifiable, Sendable {
     case all
     case missingCover
-    case needsAttention
+    case singleFileUnsplit
+    case metadataReadFailed
+    case trackNamedAudioFiles
     case withCover
+    case nameEnhancementFailed
     case looseAudio
 
     var id: String { rawValue }
@@ -15,10 +18,16 @@ enum AlbumScanResultFilter: String, CaseIterable, Identifiable, Sendable {
             "全部"
         case .missingCover:
             "缺封面"
-        case .needsAttention:
-            "需确认"
+        case .singleFileUnsplit:
+            "未分轨"
+        case .metadataReadFailed:
+            "标签异常"
+        case .trackNamedAudioFiles:
+            "track音轨"
         case .withCover:
             "已有封面"
+        case .nameEnhancementFailed:
+            "解析失败"
         case .looseAudio:
             "散落音频"
         }
@@ -30,13 +39,14 @@ struct AlbumScanResultFiltering: Sendable {
         in result: LibraryScanResult,
         filter: AlbumScanResultFilter,
         query: String,
+        failedAlbumIDs: Set<AlbumScanRecord.ID> = [],
         displayNames: ((AlbumScanRecord) -> (artistName: String, albumName: String))? = nil
     ) -> [AlbumScanRecord] {
         guard filter != .looseAudio else { return [] }
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
 
         return result.albums.filter { album in
-            matches(filter: filter, album: album) && matches(
+            matches(filter: filter, album: album, failedAlbumIDs: failedAlbumIDs) && matches(
                 query: normalizedQuery,
                 album: album,
                 displayNames: displayNames
@@ -61,18 +71,50 @@ struct AlbumScanResultFiltering: Sendable {
         }
     }
 
-    private static func matches(filter: AlbumScanResultFilter, album: AlbumScanRecord) -> Bool {
+    private static func matches(
+        filter: AlbumScanResultFilter,
+        album: AlbumScanRecord,
+        failedAlbumIDs: Set<AlbumScanRecord.ID>
+    ) -> Bool {
         switch filter {
         case .all:
             true
         case .missingCover:
             album.displayedCover == nil
-        case .needsAttention:
-            album.needsAttention
+        case .singleFileUnsplit:
+            hasSingleFileUnsplitIssue(album)
+        case .metadataReadFailed:
+            hasIssue(album) {
+                if case .metadataReadFailed = $0 { return true }
+                return false
+            }
+        case .trackNamedAudioFiles:
+            hasIssue(album) {
+                if case .trackNamedAudioFiles = $0 { return true }
+                return false
+            }
         case .withCover:
             album.displayedCover != nil
+        case .nameEnhancementFailed:
+            failedAlbumIDs.contains(album.id)
         case .looseAudio:
             false
+        }
+    }
+
+    private static func hasIssue(
+        _ album: AlbumScanRecord,
+        matching predicate: (AlbumScanIssue) -> Bool
+    ) -> Bool {
+        album.issues.contains(where: predicate)
+    }
+
+    private static func hasSingleFileUnsplitIssue(_ album: AlbumScanRecord) -> Bool {
+        album.issues.contains { issue in
+            if case .singleFileNeedsConfirmation(let hasCue) = issue {
+                return hasCue
+            }
+            return false
         }
     }
 

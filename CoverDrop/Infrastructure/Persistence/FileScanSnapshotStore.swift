@@ -50,7 +50,7 @@ final class FileScanSnapshotStore: ScanSnapshotStoring, @unchecked Sendable {
 
     func loadSnapshot(at fileURL: URL, expectedLibrary: LibraryRecord) async throws -> ScanSnapshot {
         let snapshot = try readUncheckedSnapshot(at: fileURL)
-        guard snapshot.schemaVersion == ScanSnapshot.currentSchemaVersion else {
+        guard Self.isSupportedSchemaVersion(snapshot.schemaVersion) else {
             throw FileScanSnapshotStoreError.unsupportedSchemaVersion(
                 actual: snapshot.schemaVersion,
                 supported: ScanSnapshot.currentSchemaVersion
@@ -183,6 +183,10 @@ final class FileScanSnapshotStore: ScanSnapshotStoring, @unchecked Sendable {
 
     nonisolated static func normalizedPath(_ path: String) -> String {
         URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
+    }
+
+    nonisolated static func isSupportedSchemaVersion(_ schemaVersion: Int) -> Bool {
+        (1...ScanSnapshot.currentSchemaVersion).contains(schemaVersion)
     }
 }
 

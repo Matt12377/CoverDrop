@@ -333,6 +333,7 @@
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = /opt/homebrew/include;
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "CoverDrop 需要控制 Finder，以便复用由 CoverDrop 打开的专辑窗口。";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -369,6 +370,7 @@
 				ENABLE_USER_SELECTED_FILES = readwrite;
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = /opt/homebrew/include;
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "CoverDrop 需要控制 Finder，以便复用由 CoverDrop 打开的专辑窗口。";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

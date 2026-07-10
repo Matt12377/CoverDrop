@@ -175,6 +175,12 @@ struct FileSystemLibraryScanner: LibraryScanning, AlbumRescanning {
     ) async throws -> AlbumScanRecord {
         let albumStartedAt = Date()
         let audioURLs = boundary.audioFileURLs ?? Self.recursiveAudioFiles(in: boundary.folderURL)
+        let cueSheets = Self.recursiveCueSheets(in: boundary.folderURL).map { cueURL in
+            CueSheetRecord(
+                url: cueURL,
+                relativePath: Self.relativePath(of: cueURL, under: boundary.folderURL)
+            )
+        }
         Self.logger.info(
             "[扫描][专辑 \(albumNumber)/\(totalAlbums)] \(boundary.artistName, privacy: .public) / \(boundary.albumName, privacy: .public) 音频=\(audioURLs.count)"
         )
@@ -248,7 +254,7 @@ struct FileSystemLibraryScanner: LibraryScanning, AlbumRescanning {
         var issues = boundary.issues
         if audioURLs.count == 1 {
             issues.append(.singleFileNeedsConfirmation(
-                hasCue: Self.containsCue(in: boundary.folderURL)
+                hasCue: !cueSheets.isEmpty
             ))
         }
         if !failedPaths.isEmpty {
@@ -269,6 +275,7 @@ struct FileSystemLibraryScanner: LibraryScanning, AlbumRescanning {
             artistName: boundary.artistName,
             albumName: boundary.albumName,
             audioFiles: audioFiles.sorted(by: Self.audioSort),
+            cueSheets: cueSheets,
             displayedCover: displayedCover,
             issues: issues
         )
@@ -747,16 +754,26 @@ struct FileSystemLibraryScanner: LibraryScanning, AlbumRescanning {
         ]
     }
 
-    nonisolated private static func containsCue(in root: URL) -> Bool {
+    nonisolated private static func recursiveCueSheets(in root: URL) -> [URL] {
         guard let enumerator = FileManager.default.enumerator(
             at: root,
-            includingPropertiesForKeys: [.isRegularFileKey],
+            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else { return false }
-        for case let url as URL in enumerator where url.pathExtension.lowercased() == "cue" {
-            return true
+        ) else { return [] }
+
+        var files: [URL] = []
+        for case let url as URL in enumerator {
+            if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
+                enumerator.skipDescendants()
+                continue
+            }
+            guard url.pathExtension.lowercased() == "cue",
+                  (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+                continue
+            }
+            files.append(url)
         }
-        return false
+        return files.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
     }
 
     nonisolated private static func isTrackNamedAudioFile(relativePath: String) -> Bool {
