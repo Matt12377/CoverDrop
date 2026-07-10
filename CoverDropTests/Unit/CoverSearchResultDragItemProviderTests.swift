@@ -4,8 +4,8 @@ import UniformTypeIdentifiers
 @testable import CoverDrop
 
 struct CoverSearchResultDragItemProviderTests {
-    @Test("聚合搜索结果拖拽 provider 同时提供图片和 URL representation")
-    func providerIncludesImageAndURLRepresentations() throws {
+    @Test("聚合搜索结果拖拽 provider 只提供 URL representation")
+    func providerIncludesOnlyURLRepresentations() throws {
         let result = CoverSearchResult(
             id: "douban-1401853",
             sourceName: "豆瓣",
@@ -18,7 +18,7 @@ struct CoverSearchResultDragItemProviderTests {
 
         let provider = CoverSearchResultDragItemProvider.provider(for: result)
 
-        #expect(provider.hasItemConformingToTypeIdentifier(UTType.jpeg.identifier))
+        #expect(!provider.hasItemConformingToTypeIdentifier(UTType.jpeg.identifier))
         #expect(provider.hasItemConformingToTypeIdentifier(UTType.url.identifier))
         #expect(provider.hasItemConformingToTypeIdentifier(UTType.utf8PlainText.identifier))
     }
