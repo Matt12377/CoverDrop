@@ -31,6 +31,9 @@ playground.xcworkspace
 
 .build/
 
+# Codex isolated feature worktrees
+.worktrees/
+
 # LLVM code coverage and profiling output
 *.profraw
 *.profdata
