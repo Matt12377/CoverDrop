@@ -558,119 +558,26 @@ enum AlbumNameSuggestionParser {
 }
 
 enum AlbumNameSuggestionCleaner {
-    static func clean(_ suggestion: AlbumNameSuggestion) -> AlbumNameSuggestion {
-        AlbumNameSuggestion(
-            artistName: normalizedWhitespace(suggestion.artistName),
-            albumName: cleanAlbumName(suggestion.albumName)
+    nonisolated static func clean(_ suggestion: AlbumNameSuggestion) -> AlbumNameSuggestion {
+        let artistName = AlbumNameCleaning.cleanArtistName(suggestion.artistName)
+        return AlbumNameSuggestion(
+            artistName: artistName,
+            albumName: cleanAlbumName(
+                suggestion.albumName,
+                artistName: artistName
+            )
         )
     }
 
-    static func cleanAlbumName(_ albumName: String) -> String {
-        var normalized = normalizedWhitespace(albumName)
-        let patterns = [
-            #"^\s*(?:19|20)\d{6}\s*[-_—–. ]+\s*(\S.*)$"#,
-            #"^\s*(?:19|20)\d{2}\s*年\s*[-_—–. ]*\s*(\S.*)$"#,
-            #"^\s*(?:19|20)\d{2}\s*[-_—–. ]+\s*(\S.*)$"#
-        ]
-
-        for pattern in patterns {
-            if let cleaned = firstCapturedGroup(in: normalized, pattern: pattern) {
-                normalized = normalizedWhitespace(cleaned)
-                break
-            }
-        }
-
-        return stripTrailingNoiseBracketGroups(from: normalized)
+    nonisolated static func cleanAlbumName(_ albumName: String) -> String {
+        cleanAlbumName(albumName, artistName: nil)
     }
 
-    private static func stripTrailingNoiseBracketGroups(from value: String) -> String {
-        var current = value
-
-        while let group = trailingBracketGroup(in: current),
-              isNoiseBracketContent(group.content) {
-            current = String(current[..<group.range.lowerBound])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-
-        return current.isEmpty ? value : normalizedWhitespace(current)
-    }
-
-    private static func trailingBracketGroup(in value: String) -> (content: String, range: Range<String.Index>)? {
-        let closingToOpening: [Character: Character] = [
-            "]": "[",
-            ")": "(",
-            "）": "（",
-            "】": "【"
-        ]
-
-        let trimmedEnd = value.lastIndex { !$0.isWhitespace } ?? value.startIndex
-        guard trimmedEnd < value.endIndex,
-              let opening = closingToOpening[value[trimmedEnd]] else {
-            return nil
-        }
-
-        var index = value.index(before: trimmedEnd)
-        while true {
-            if value[index] == opening {
-                let contentStart = value.index(after: index)
-                let content = String(value[contentStart..<trimmedEnd])
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                return content.isEmpty ? nil : (content, index..<value.index(after: trimmedEnd))
-            }
-
-            if index == value.startIndex {
-                break
-            }
-            index = value.index(before: index)
-        }
-
-        return nil
-    }
-
-    private static func isNoiseBracketContent(_ value: String) -> Bool {
-        let normalized = normalizedWhitespace(value)
-            .lowercased()
-            .replacingOccurrences(of: " ", with: "")
-            .replacingOccurrences(of: "-", with: "")
-            .replacingOccurrences(of: "_", with: "")
-            .replacingOccurrences(of: ".", with: "")
-        let noiseTokens = [
-            "套装", "套裝", "珍藏", "百代珍藏", "系列", "合集", "合辑", "合輯",
-            "wav", "flac", "dsd", "dff", "ape", "mp3", "sacd", "cue",
-            "hires", "24bit", "16bit", "96khz", "192khz",
-            "无损", "無損", "抓轨", "抓軌", "整轨", "整軌",
-            "港版", "台版", "臺版", "日本版", "首版", "复刻", "復刻", "再版",
-            "remaster", "remastered", "deluxe", "anniversary", "limitededition"
-        ]
-
-        if noiseTokens.contains(where: { normalized.contains($0) }) {
-            return true
-        }
-
-        return normalized.range(of: #"^vol(?:ume)?\d+$"#, options: .regularExpression) != nil ||
-            normalized.range(of: #"^(?:cd|disc|disk)\d+$"#, options: .regularExpression) != nil ||
-            normalized.range(of: #"^之\d+$"#, options: .regularExpression) != nil
-    }
-
-    private static func normalizedWhitespace(_ value: String) -> String {
-        value
-            .components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-    }
-
-    private static func firstCapturedGroup(in value: String, pattern: String) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
-        let range = NSRange(value.startIndex..<value.endIndex, in: value)
-        guard let match = regex.firstMatch(in: value, range: range),
-              match.numberOfRanges >= 2,
-              let captureRange = Range(match.range(at: 1), in: value) else {
-            return nil
-        }
-
-        let captured = String(value[captureRange])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return captured.isEmpty ? nil : captured
+    nonisolated static func cleanAlbumName(
+        _ albumName: String,
+        artistName: String?
+    ) -> String {
+        AlbumNameCleaning.cleanAlbumName(albumName, artistName: artistName)
     }
 }
 

@@ -1,119 +1,131 @@
 import Foundation
 
 enum AlbumDisplayNameCleaning {
+    private nonisolated static let metadataMajorityThreshold = 0.70
+
     nonisolated static func displayNames(
         for album: AlbumScanRecord,
         artistName: String,
         albumName: String
     ) -> (artistName: String, albumName: String) {
-        guard album.displayedCover != nil else {
-            return (artistName, albumName)
+        let resolvedArtistName: String
+        if artistName == album.artistName {
+            resolvedArtistName = corroboratedArtistName(for: album) ?? artistName
+        } else {
+            resolvedArtistName = artistName
+        }
+
+        let resolvedAlbumName: String
+        if albumName == album.albumName {
+            resolvedAlbumName = corroboratedAlbumName(
+                for: album,
+                artistName: resolvedArtistName
+            ) ?? albumName
+        } else {
+            resolvedAlbumName = albumName
         }
 
         return (
-            artistName: clean(artistName),
-            albumName: clean(albumName)
+            artistName: AlbumNameCleaning.cleanArtistName(resolvedArtistName),
+            albumName: AlbumNameCleaning.cleanAlbumName(
+                resolvedAlbumName,
+                artistName: resolvedArtistName
+            )
         )
     }
 
     nonisolated static func clean(_ value: String) -> String {
-        var cleaned = convertTraditionalChineseToSimplified(value)
-        cleaned = removeNoiseBrackets(from: cleaned)
-        cleaned = removeStandaloneYears(from: cleaned)
-        cleaned = removePlainNoiseTokens(from: cleaned)
-        cleaned = normalizeSeparators(in: cleaned)
-        return cleaned.isEmpty ? value.trimmingCharacters(in: .whitespacesAndNewlines) : cleaned
+        AlbumNameCleaning.cleanAlbumName(value, artistName: nil)
     }
 
-    private nonisolated static func convertTraditionalChineseToSimplified(_ value: String) -> String {
-        value.applyingTransform(StringTransform(rawValue: "Traditional-Simplified"), reverse: false) ?? value
+    private nonisolated static func corroboratedArtistName(
+        for album: AlbumScanRecord
+    ) -> String? {
+        let albumArtistCandidate = stableCandidate(
+            from: album.audioFiles.compactMap { $0.metadata?.albumArtist },
+            cleanedBy: AlbumNameCleaning.cleanArtistName,
+            rejectsPlaceholder: false
+        )
+        if let albumArtistCandidate,
+           corroborates(candidate: albumArtistCandidate, rawValue: album.artistName) {
+            return albumArtistCandidate
+        }
+
+        let artistCandidate = stableCandidate(
+            from: album.audioFiles.compactMap { $0.metadata?.artist },
+            cleanedBy: AlbumNameCleaning.cleanArtistName,
+            rejectsPlaceholder: false
+        )
+        if let artistCandidate,
+           corroborates(candidate: artistCandidate, rawValue: album.artistName) {
+            return artistCandidate
+        }
+
+        return nil
     }
 
-    private nonisolated static func removeNoiseBrackets(from value: String) -> String {
-        let pattern = #"\[[^\]]+\]|【[^】]+】|「[^」]+」|\([^)]*\)|（[^）]*）"#
-        return value.replacingOccurrences(
-            of: pattern,
-            with: { match in
-                let content = match
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "[]【】「」()（）"))
-                return isNoiseToken(content) ? " " : match
+    private nonisolated static func corroboratedAlbumName(
+        for album: AlbumScanRecord,
+        artistName: String
+    ) -> String? {
+        let candidate = stableCandidate(
+            from: album.audioFiles.compactMap { $0.metadata?.album },
+            cleanedBy: { value in
+                AlbumNameCleaning.cleanAlbumName(value, artistName: artistName)
             },
-            options: .regularExpression
+            rejectsPlaceholder: true
         )
-    }
 
-    private nonisolated static func removeStandaloneYears(from value: String) -> String {
-        value.replacingOccurrences(
-            of: #"(?<!\d)(19|20)\d{2}(?!\d)"#,
-            with: " ",
-            options: .regularExpression
-        )
-    }
-
-    private nonisolated static func removePlainNoiseTokens(from value: String) -> String {
-        let parts = value.split {
-            String($0).rangeOfCharacter(from: separatorCharacters) != nil
+        guard let candidate,
+              corroborates(candidate: candidate, rawValue: album.albumName) else {
+            return nil
         }
-        guard parts.count > 1 else { return value }
-        return parts
-            .map(String.init)
-            .filter { !isNoiseToken($0) }
-            .joined(separator: " ")
+        return candidate
     }
 
-    private nonisolated static func normalizeSeparators(in value: String) -> String {
-        value
-            .replacingOccurrences(of: #"[\s_\-–—·•|／/\\]+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private nonisolated static let separatorCharacters = CharacterSet(
-        charactersIn: " \t\r\n_-–—·•|／/\\"
-    )
-
-    private nonisolated static func isNoiseToken(_ value: String) -> Bool {
-        let normalized = value
-            .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
-            .replacingOccurrences(of: #"[\s_\-–—·•|／/\\.]+"#, with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-
-        guard !normalized.isEmpty else { return true }
-        if normalized.range(of: #"^\d{2,3}(bit|khz)$"#, options: .regularExpression) != nil {
-            return true
-        }
-        return noiseTokens.contains(normalized)
-    }
-
-    private nonisolated static let noiseTokens: Set<String> = [
-        "ape", "wav", "flac", "dsd", "dff", "dsf", "mp3", "m4a", "aac", "alac", "aiff", "aif",
-        "sacd", "cd", "dvd", "bluray", "blu ray", "hires", "hi res", "lossless", "vinyl",
-        "24bit", "16bit", "96khz", "192khz", "remaster", "remastered", "shmcd", "xrcd",
-        "港版", "台版", "台湾版", "日本版", "日版", "美版", "欧版", "韩版", "内地版", "大陆版",
-        "限定版", "特别版", "首版", "再版", "完整版", "无损", "整轨", "分轨"
-    ]
-}
-
-private extension String {
-    nonisolated func replacingOccurrences(
-        of pattern: String,
-        with replacement: (String) -> String,
-        options: NSString.CompareOptions
-    ) -> String {
-        guard options.contains(.regularExpression),
-              let regex = try? NSRegularExpression(pattern: pattern) else {
-            return self
+    private nonisolated static func stableCandidate(
+        from values: [String],
+        cleanedBy clean: (String) -> String,
+        rejectsPlaceholder: Bool
+    ) -> String? {
+        let cleanedValues = values.compactMap { value -> (key: String, value: String)? in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            let cleaned = clean(trimmed)
+            let key = AlbumNameCleaning.canonicalKey(cleaned)
+            guard !key.isEmpty else { return nil }
+            return (key, cleaned)
         }
 
-        let range = NSRange(startIndex..<endIndex, in: self)
-        var result = self
-        for match in regex.matches(in: self, range: range).reversed() {
-            guard let matchRange = Range(match.range, in: self),
-                  let resultRange = Range(match.range, in: result) else {
-                continue
+        guard !cleanedValues.isEmpty else { return nil }
+        let grouped = Dictionary(grouping: cleanedValues, by: \.key)
+        let ranked = grouped.sorted { lhs, rhs in
+            if lhs.value.count == rhs.value.count {
+                return lhs.key < rhs.key
             }
-            result.replaceSubrange(resultRange, with: replacement(String(self[matchRange])))
+            return lhs.value.count > rhs.value.count
         }
-        return result
+        guard let winner = ranked.first else { return nil }
+        if ranked.count > 1, ranked[1].value.count == winner.value.count {
+            return nil
+        }
+
+        let ratio = Double(winner.value.count) / Double(cleanedValues.count)
+        guard ratio >= metadataMajorityThreshold else { return nil }
+        guard let candidate = winner.value.first?.value else { return nil }
+        if rejectsPlaceholder, AlbumNameCleaning.isPlaceholderAlbumName(candidate) {
+            return nil
+        }
+        return candidate
+    }
+
+    private nonisolated static func corroborates(
+        candidate: String,
+        rawValue: String
+    ) -> Bool {
+        let candidateKey = AlbumNameCleaning.canonicalKey(candidate)
+        let rawKey = AlbumNameCleaning.canonicalKey(rawValue)
+        guard !candidateKey.isEmpty, !rawKey.isEmpty else { return false }
+        return rawKey.contains(candidateKey)
     }
 }

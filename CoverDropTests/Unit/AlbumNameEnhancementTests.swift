@@ -152,6 +152,17 @@ struct AlbumNameEnhancementTests {
         #expect(AlbumNameSuggestionCleaner.cleanAlbumName("No.1") == "No.1")
     }
 
+    @Test("Ollama 输出会复用展示名称的字段感知清洗规则")
+    func ollamaOutputUsesSharedNameCleaningRules() throws {
+        let suggestion = try AlbumNameSuggestionParser.parse(
+            content: #"{"artistName":"動力火車合集【qobuz】","albumName":"[Qobuz] 動力火車 - 背叛情歌 1999 [24-96]"}"#
+        )
+
+        #expect(suggestion.artistName == "动力火车")
+        #expect(suggestion.albumName == "背叛情歌")
+        #expect(AlbumNameSuggestionCleaner.cleanAlbumName("A-Lin - LINK", artistName: "A-Lin") == "LINK")
+    }
+
     @Test("Ollama 返回非 JSON 时解析失败")
     func rejectsNonJSONContent() {
         do {

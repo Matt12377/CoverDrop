@@ -531,53 +531,71 @@ struct LibraryScanSummaryView: View {
     }
 
     private func albumGrid(albums: [AlbumScanRecord]) -> some View {
-        ScrollView {
-            LazyVGrid(
-                columns: [
-                    GridItem(.adaptive(minimum: 168, maximum: 168), spacing: 16)
-                ],
-                alignment: .leading,
-                spacing: 16
-            ) {
-                ForEach(albums) { album in
-                    AlbumCoverCard(
-                        album: album,
-                        appModel: appModel,
-                        displayAlbumName: appModel.displayAlbumName(for: album),
-                        displayArtistName: appModel.displayArtistName(for: album),
-                        hasEnhancedAlbumName: appModel.hasEnhancedAlbumName(for: album),
-                        albumNameEnhancementState: appModel.albumNameEnhancementState(forAlbumID: album.id),
-                        coverWriteMessage: appModel.coverWriteMessage(for: album.id),
-                        isSelectionEnabled: filter == .singleFileUnsplit,
-                        isSelectionMode: isUnsplitSelectionMode,
-                        isSelected: unsplitSelection.selectedAlbumIDs.contains(album.id)
-                    ) {
-                        if isUnsplitSelectionMode, filter == .singleFileUnsplit {
-                            unsplitSelection.toggle(album.id)
-                        } else {
+        GeometryReader { proxy in
+            let contentWidth = max(
+                0,
+                proxy.size.width - 2 * FixedCoverGridLayout.horizontalContentPadding
+            )
+            let metrics = FixedCoverGridLayout.metrics(forContentWidth: contentWidth)
+
+            ScrollView {
+                LazyVGrid(
+                    columns: fixedAlbumGridColumns(for: metrics),
+                    alignment: .leading,
+                    spacing: FixedCoverGridLayout.rowSpacing
+                ) {
+                    ForEach(albums) { album in
+                        AlbumCoverCard(
+                            album: album,
+                            appModel: appModel,
+                            displayAlbumName: appModel.displayAlbumName(for: album),
+                            displayArtistName: appModel.displayArtistName(for: album),
+                            hasEnhancedAlbumName: appModel.hasEnhancedAlbumName(for: album),
+                            albumNameEnhancementState: appModel.albumNameEnhancementState(forAlbumID: album.id),
+                            coverWriteMessage: appModel.coverWriteMessage(for: album.id),
+                            isSelectionEnabled: filter == .singleFileUnsplit,
+                            isSelectionMode: isUnsplitSelectionMode,
+                            isSelected: unsplitSelection.selectedAlbumIDs.contains(album.id)
+                        ) {
+                            if isUnsplitSelectionMode, filter == .singleFileUnsplit {
+                                unsplitSelection.toggle(album.id)
+                            } else {
+                                openAlbumDetail(albumID: album.id, pendingCoverURL: nil)
+                            }
+                        } onAcceptedCoverDrop: {
                             openAlbumDetail(albumID: album.id, pendingCoverURL: nil)
+                        } onToggleSelection: {
+                            isUnsplitSelectionMode = true
+                            unsplitSelection.toggle(album.id)
+                        } onSelectAllUnsplit: {
+                            isUnsplitSelectionMode = true
+                            unsplitSelection.selectAllSplitCandidates(in: albums)
+                        } onSplitWithXLD: {
+                            let selectedIDs = unsplitSelection.selectedAlbumIDs
+                            splitUnsplitAlbumsWithXLD(
+                                selectedIDs.contains(album.id) && !selectedIDs.isEmpty ? selectedIDs : Set([album.id])
+                            )
                         }
-                    } onAcceptedCoverDrop: {
-                        openAlbumDetail(albumID: album.id, pendingCoverURL: nil)
-                    } onToggleSelection: {
-                        isUnsplitSelectionMode = true
-                        unsplitSelection.toggle(album.id)
-                    } onSelectAllUnsplit: {
-                        isUnsplitSelectionMode = true
-                        unsplitSelection.selectAllSplitCandidates(in: albums)
-                    } onSplitWithXLD: {
-                        let selectedIDs = unsplitSelection.selectedAlbumIDs
-                        splitUnsplitAlbumsWithXLD(
-                            selectedIDs.contains(album.id) && !selectedIDs.isEmpty ? selectedIDs : Set([album.id])
-                        )
                     }
                 }
+                .padding(.horizontal, FixedCoverGridLayout.horizontalContentPadding)
+                .padding(.top, FixedCoverGridLayout.rowSpacing)
+                .padding(.bottom, 96)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 16)
-            .padding(.bottom, 96)
         }
         .frame(minHeight: 320, maxHeight: .infinity)
+    }
+
+    private func fixedAlbumGridColumns(
+        for metrics: FixedCoverGridLayout.Metrics
+    ) -> [GridItem] {
+        Array(
+            repeating: GridItem(
+                .fixed(FixedCoverGridLayout.cardWidth),
+                spacing: metrics.columnSpacing
+            ),
+            count: metrics.columnCount
+        )
     }
 
     private func looseAudioList(paths: [String]) -> some View {
@@ -832,7 +850,7 @@ private struct AlbumCoverCard: View {
             }
         }
         .buttonStyle(.plain)
-        .frame(width: 168)
+        .frame(width: FixedCoverGridLayout.cardWidth)
         .background(cardBackground, in: RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusLg))
         .clipShape(RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusLg))
         .scaleEffect(isHovered ? 1.018 : 1)
@@ -897,9 +915,15 @@ private struct AlbumCoverCard: View {
                 placeholderSize: 32,
                 placeholderText: "缺封面"
             )
-            .frame(width: 168, height: 168)
+            .frame(
+                width: FixedCoverGridLayout.cardWidth,
+                height: FixedCoverGridLayout.cardWidth
+            )
         }
-        .frame(width: 168, height: 168)
+        .frame(
+            width: FixedCoverGridLayout.cardWidth,
+            height: FixedCoverGridLayout.cardWidth
+        )
         .overlay(alignment: .topLeading) {
             statusBadge
                 .padding(6)
@@ -2247,8 +2271,11 @@ private struct AggregateCoverResultCard: View {
     }
 
     private var aggregateCoverImage: some View {
-        RemoteCoverPreviewImage(url: RemoteCoverPreviewLoader.previewURL(for: result))
+        Color.clear
         .aspectRatio(1, contentMode: .fit)
+        .overlay {
+            RemoteCoverPreviewImage(url: RemoteCoverPreviewLoader.previewURL(for: result))
+        }
         .clipShape(RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusSm))
         .overlay {
             RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusSm)
@@ -2289,6 +2316,7 @@ private struct RemoteCoverPreviewImage: View {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFill()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if didFail {
                 VStack(spacing: 8) {
                     Image(systemName: "photo")
@@ -2302,6 +2330,7 @@ private struct RemoteCoverPreviewImage: View {
                     .controlSize(.small)
             }
         }
+        .clipped()
         .task(id: requestKey) {
             await loadImage()
         }

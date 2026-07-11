@@ -14,6 +14,5 @@ struct CoverDropApp: App {
             RootView(appModel: appModel)
         }
         .defaultSize(width: 1_080, height: 720)
-        .windowResizability(.contentMinSize)
     }
 }

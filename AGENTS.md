@@ -1,212 +1,211 @@
-# CoverDrop 项目级说明
+# CoverDrop AI 接手指南
 
-本文件给新的 Codex 会话快速理解 CoverDrop 使用。所有项目沟通、总结、代码注释、日志和文档默认使用中文。
+本文是后续 AI 会话的首要项目说明。开始工作前先读本文，再按任务读取相关代码。除非用户明确要求，项目沟通、代码注释、日志、文档和界面文案均使用中文。
 
-## 项目定位
+## 新会话启动顺序
 
-CoverDrop 是一个 macOS SwiftUI 桌面应用，用来半自动整理音乐库专辑封面。
+1. 运行 `git status --short`，确认用户和其他会话留下的改动。
+2. 阅读本文件、`README.md` 和与任务直接相关的源码；`ARCHITECTURE.md` 含有部分早期规划，只能作背景参考，不能覆盖当前代码事实。
+3. 用 `rg` 定位调用链和测试，不要只根据文件名猜实现。
+4. 修改前确认不会覆盖工作区已有改动；发现同一文件正被其他会话修改时，先向用户说明冲突风险。
+5. 实现后运行与改动范围匹配的测试，交付前至少执行 `git diff --check`；代码改动默认执行 `zsh Scripts/verify.sh`。
 
-核心流程：
+禁止把未提交文件视为可清理的临时产物。不要使用 `git reset --hard`、`git checkout --` 或其他会丢失现有改动的命令。
 
-1. 用户添加一个音乐库、歌手目录或单张专辑目录。
-2. App 扫描目录结构，识别歌手、专辑、音频文件、已有封面和异常情况。
-3. 扫描完成后显示封面墙，优先处理缺封面和需确认专辑。
-4. 用户打开专辑详情，查看路径、曲目、封面状态和搜索词。
-5. 用户通过内置网页或外部浏览器搜索封面，把图片拖入 App。
-6. App 把拖入图片暂存，用户点保存后写入对应专辑目录下的 `cover.jpg`。
+## 项目目标与核心流程
 
-重要原则：
+CoverDrop 是 macOS SwiftUI 桌面应用，用于半自动整理音乐库专辑封面：
 
-- 文件夹层级优先，音频标签只作为核对和辅助。
-- 扫描阶段只读取和分析，不修改音乐库。
-- 写入真实音乐库只能通过专门基础设施服务，界面不得直接改文件。
-- LLM 结果只能影响展示和搜索词，不影响扫描边界、真实路径和封面保存位置。
+1. 用户添加音乐库、歌手目录或单张专辑目录。
+2. App 保存安全书签并按用户确认的目录角色扫描。
+3. 扫描器识别专辑边界、音频、CUE、已有图片、内嵌封面及异常。
+4. 封面墙按状态筛选专辑，详情页展示路径、曲目、名称和问题。
+5. 用户通过聚合搜索或内置网页寻找封面，将图片拖入 App 暂存。
+6. 只有用户点击保存后，基础设施服务才向专辑目录写入 `cover.jpg`。
 
-## 当前架构
+不可破坏的产品边界：
 
-主要目录：
+- 文件夹层级是专辑边界和真实路径的主证据；音频标签只用于核对、异常判断和展示名称辅助。
+- 扫描、名称清洗和 Ollama 均不得移动、重命名或修改音乐文件及标签。
+- 扫描阶段只读。真实音乐库写入只能经 `CoverImageWriting` 等专门协议实现，SwiftUI View 不得直接改文件。
+- Ollama 输出只影响派生展示名与搜索词，不得决定专辑边界、真实路径或封面保存位置。
+- 拖入图片先进入暂存状态；写入失败时必须保留待保存图片，不能制造“已保存”的 UI 状态。
 
-- `CoverDrop/App`：应用入口、依赖装配、顶层状态。
-- `CoverDrop/Domain`：业务模型、协议、纯规则。
-- `CoverDrop/Infrastructure`：文件系统、TagLib、ImageIO、Ollama 等实现。
-- `CoverDrop/Features/LibraryHome`：当前主要 UI，包含音乐库列表、封面墙、详情页和搜索页。
-- `CoverDropTests`：单元测试和集成测试。
-- `Scripts/verify.sh`：完整构建和测试脚本。
+## 技术环境
 
-依赖方向：
+- Swift 6、SwiftUI、Xcode 工程：`CoverDrop.xcodeproj`。
+- macOS deployment target：`26.4`；默认 actor isolation 为 `MainActor`，并启用 approachable concurrency。
+- App Sandbox 已启用，依赖用户选择目录的读写权限、安全书签、网络客户端权限和 Finder Apple Events。
+- TagLib C 通过 Homebrew 路径链接：头文件 `/opt/homebrew/include`，库 `/opt/homebrew/lib`，链接参数 `-ltag_c`。
+- 持久化使用系统 `SQLite3`；图片使用 ImageIO；内置搜索页使用 WebKit；文件变化使用 FSEvents。
+- XLD 是可选外部应用。CoverDrop 只把 CUE 交给 XLD，不自行分轨。
+- 本地名称增强依赖 Ollama，默认 `http://127.0.0.1:11434`、模型 `qwen3.5:4b-mlx`。
 
-- `Features` 可以依赖 `Domain`，不要直接依赖 TagLib、ImageIO、Ollama 或 SQLite。
-- `Infrastructure` 实现 `Domain/Protocols` 中的协议。
-- `AppEnvironment` 负责装配真实实现，测试通过假实现注入。
-- 应用可调参数放在 `AppConfiguration`。
+常用命令：
 
-## 当前已实现能力
+```shell
+open CoverDrop.xcodeproj
+zsh Scripts/verify.sh
+COVERDROP_DEBUG_LOG=1 open <构建出的 CoverDrop.app>
+```
 
-- 添加音乐库，自动建议目录角色：音乐库、歌手目录、单张专辑。
-- 保存音乐库记录和安全书签。
-- 按目录角色扫描专辑边界、散落音频、音频标签、已有图片封面、内嵌封面。
-- 封面墙支持筛选：全部、缺封面、未分轨、标签异常、track 音轨、已有封面、解析失败、散落音频。
-- 专辑详情显示封面、路径、曲目、异常提示、搜索词。
-- 专辑详情支持在 Finder 中显示专辑目录；失败时在专辑内展示中文错误，不改变真实音乐库。
-- 对单整轨且存在 CUE 的专辑，详情页支持交给 XLD 分轨；App 只负责打开 CUE，不直接拆分或改写音频文件。
-- 内置搜索页支持豆瓣、Bing 图片、Google 图片，默认豆瓣。
-- 本地或网页图片拖入后先暂存，保存后写入 `cover.jpg`。
-- 保存封面前会检查专辑目录是否仍存在；如果 NAS/外部盘断开或目录被删除，提示“未找到专辑”，保留待保存封面，不继续写入。
-- 已开始接入本地 Ollama 专辑名称增强：扫描后生成展示和搜索用歌手名/专辑名，原始扫描名仍保留。
-- Ollama 名称增强失败会记录到单张专辑状态，封面墙可用“解析失败”筛选查看，失败不再弹全局错误打断用户。
-- 音乐库侧边栏支持多选：单击单选、`Shift` 连选、`Cmd` 点选/取消、`Cmd + A` 全选。
-- 音乐库侧边栏右键菜单支持全选、移除、重命名、重新扫描；批量移除只删除 CoverDrop 本地记录，不删除真实音乐文件。
-- 实时刷新已改为局部刷新：外部文件变更只重扫受影响专辑目录，App 内保存封面会直接更新当前 UI，不走外部变更重扫。
-- 扫描结果已持久化为 SQLite 快照，支持右键加载上次扫描结果，并在加载时按专辑数显示流式进度。
+`Scripts/verify.sh` 会使用独立 DerivedData 执行 `xcodebuild clean test`，无需代码签名。若本机缺少 TagLib，先确认 Homebrew 的 `taglib` 已安装且位于上述路径。
 
-## 扫描规则要点
+## 架构与依赖方向
 
-核心文件：`CoverDrop/Infrastructure/FileSystem/FileSystemLibraryScanner.swift`。
+```text
+CoverDrop/App                 应用入口、依赖装配、AppModel 和顶层路由
+CoverDrop/Domain/Models       业务数据类型
+CoverDrop/Domain/Protocols    文件系统、扫描、搜索、持久化等能力接口
+CoverDrop/Domain/Policies     可独立测试的名称、筛选和展示规则
+CoverDrop/Infrastructure      协议的真实实现
+CoverDrop/Features/LibraryHome 当前主要界面与交互
+CoverDropTests/Unit           纯规则、状态和假依赖测试
+CoverDropTests/Integration    临时目录及真实基础设施集成测试
+Scripts                       验证和名称清洗审计脚本
+```
 
-当前应保持的行为：
+依赖规则：
 
-- `role == .album`：导入目录本身是一张专辑，子目录如 `CD1`、`CD2` 不拆成新专辑。
-- `role == .artist`：导入目录是歌手目录，子目录中的专辑应归并到真实专辑根。
-- `role == .library`：第一层是歌手，第二层及以下识别专辑。
-- 普通结构 `歌手/专辑/歌曲` 保持为一张专辑。
-- 多碟结构 `专辑/CD1/歌曲`、`专辑/CD2/歌曲` 归并到 `专辑`。
-- 纯数字碟目录 `专辑/01/歌曲`、`专辑/02/歌曲` 在同一父目录下有多个纯数字含音频兄弟目录时，也归并到父专辑。
-- 格式层 `WAV`、`FLAC`、`DSD`、`DFF` 等归并到父专辑。
-- 泛称容器 `album`、`albums`、`专辑` 以及合集/汇总/套装目录用于辅助识别专辑边界。
-- `歌手/001/真实专辑/歌曲` 中的 `001` 是编号壳，不应被当成碟目录。
-- `专辑/01 第一首/track.flac`、`专辑/02 第二首/track.flac` 是一首歌一个文件夹，应归并到共同专辑。
-- 版本目录如 `港版`、`日本版` 不应静默合并，需标记为需要确认。
+- `Features` 通过 `AppModel` 和 `Domain` 类型工作，不直接创建或依赖 TagLib、ImageIO、Ollama、SQLite 等具体实现。
+- `Infrastructure` 实现 `Domain/Protocols`；协议和纯规则不反向依赖 UI 或基础设施。
+- `AppEnvironment.live` 是真实依赖的唯一主要装配点，测试通过构造 `AppEnvironment` 注入假实现。
+- 应用级参数统一放在 `AppConfiguration`，不要在基础设施内部另藏默认值。
+- `AppModel` 是 `@MainActor` 的顶层状态所有者。异步 I/O 可离开主线程，发布 UI 状态必须回到正确 actor。
 
-每次新增扫描规则，必须同时增加正例和反例测试，避免规则互相误伤。
+## 关键代码地图
 
-## 扫描性能要点
+- `CoverDrop/App/AppModel.swift`：导入、扫描、路由、封面暂存/保存、Ollama 队列、快照和实时刷新。文件较大，修改前先定位相关状态及清理路径。
+- `CoverDrop/App/AppEnvironment.swift`：生产依赖装配。
+- `CoverDrop/App/AppConfiguration.swift`：扫描并发、快照目录、实时刷新、搜索源、Ollama 参数。
+- `CoverDrop/Infrastructure/FileSystem/FileSystemLibraryScanner.swift`：专辑边界发现和专辑扫描核心。
+- `CoverDrop/Domain/Policies/AlbumNameCleaning.swift`：歌手名/专辑名确定性清洗。
+- `CoverDrop/Domain/Policies/AlbumDisplayNameCleaning.swift`：目录名、标签多数候选和 Ollama 建议的展示决策。
+- `CoverDrop/Domain/Policies/AlbumScanDisplayIndex.swift`：封面墙筛选、搜索和统计索引。
+- `CoverDrop/Infrastructure/Persistence/SQLiteScanSnapshotStore.swift`：当前 SQLite 快照实现。
+- `CoverDrop/Infrastructure/Persistence/FileScanSnapshotStore.swift`：旧 JSON 快照兼容实现，不要随意删除。
+- `CoverDrop/Features/LibraryHome/LibraryHomeView.swift`：音乐库侧栏、多选、导入和顶层页面。
+- `CoverDrop/Features/LibraryHome/LibraryScanSummaryView.swift`：封面墙、详情、搜索与拖图，当前超过 3000 行；大改前应先提出拆分边界，不要顺手全面重构。
+- `CoverDrop/Features/LibraryHome/FixedCoverGridLayout.swift`：封面墙固定网格列数/尺寸计算。
 
-当前初次建库和局部刷新都围绕减少重复 I/O 优化：
+## 当前行为
 
-- 默认专辑扫描并发为 `12`，上限 `24`，配置在 `AppConfiguration.Scan`。
-- `role == .library` 时，歌手目录发现阶段会并发执行，但结果仍按路径排序，避免 UI 顺序随机跳动。
-- 目录发现阶段会保留已找到的音频 URL，后续扫描专辑时复用，避免“发现专辑递归一次、扫描专辑再递归一次”。
-- `role == .album` 的单专辑导入也复用第一次递归得到的音频列表。
-- 封面检测先扫描专辑目录内图片；如果已经找到有效图片封面，读取音频标签时跳过内嵌 artwork 抽取。
-- 只有没有有效图片封面时，才允许 `TagLibMetadataReader` 通过 AVFoundation 提取音频内嵌封面。
-- 如果目录内常见封面名图片损坏，仍会继续尝试内嵌图，并记录 `invalidNamedCovers` 问题。
+### 音乐库与扫描
 
-性能相关回归测试重点：
+- 支持 `.library`、`.artist`、`.album` 三种目录角色，导入时自动建议，最终由用户确认。
+- 音乐库记录保存在 `UserDefaultsLibraryStore`，包含显示名、路径、安全书签和角色。
+- 一次只运行一个全库扫描；批量重扫按侧栏顺序逐个执行。
+- 默认专辑扫描并发为 `12`，配置范围 `1...24`。发现结果和最终结果需保持稳定排序。
+- 扫描后保存 SQLite 快照，并为已扫描音乐库启动 FSEvents 监听。
+- 外部文件变化优先局部重扫受影响专辑；App 自己保存封面时直接更新 UI，并抑制对应的外部刷新事件。
+
+### 封面与搜索
+
+- 目录图片优先；没有有效图片时才读取并导出音频内嵌 artwork 作为缓存预览。
+- 常见封面名图片损坏时继续尝试内嵌图，并记录 `invalidNamedCovers`。
+- 搜索源包括聚合搜索、豆瓣、Bing 图片和 Google 图片，默认“聚合搜索”。
+- 搜索页左侧为 `WKWebView`，右侧为搜索源、专辑信息和封面预览。
+- 本地或远程图片拖入后自动回详情页，但仍需用户显式保存。
+- 保存前检查专辑目录仍存在。NAS 断开或目录消失时提示“未找到专辑”，保留暂存图片。
+
+### Ollama 名称增强
+
+- 当前是手动触发，不在扫描完成后自动跑：可对单张专辑触发，也可对当前音乐库缺封面的专辑批量触发并停止。
+- 批量请求默认跳过已有封面专辑；单张手动请求允许处理已有封面专辑。
+- 队列串行处理并避免重复任务；切换扫描结果、移除音乐库或用户停止时要正确取消并清理状态。
+- 请求输入包含原始名称、相对路径、文件夹名和最多若干首曲目标签；输出必须解析为严格的 `artistName`、`albumName`。
+- 单张失败记录在专辑状态中，UI 回退确定性清洗后的原始名称，并可通过“解析失败”筛选查看，不能用全局错误打断整批任务。
+- 建议和状态随扫描快照保存；加载快照后恢复派生展示数据。
+
+### 快照
+
+- 默认目录为 `~/Library/Application Support/CoverDrop/ScanDatabases`。
+- 新快照是 SQLite；稳定文件名由音乐库路径和目录角色生成，重复扫描替换该库当前快照。
+- `StreamingScanSnapshotStoring` 按专辑数报告流式加载进度。
+- 非 SQLite 文件回退到旧 `FileScanSnapshotStore` JSON 读取，以兼容历史数据。
+- `ScanSnapshot.currentSchemaVersion` 当前为 `2`。改 schema 必须提供迁移或兼容方案及回归测试。
+
+## 扫描边界规则
+
+修改 `FileSystemLibraryScanner` 时必须同时添加正例和反例测试，避免规则互相误伤。当前需保持：
+
+- `.album`：导入目录本身就是专辑，`CD1`、`CD2` 等子目录不拆分。
+- `.artist`：导入目录是歌手目录，向下寻找真实专辑根。
+- `.library`：第一层通常是歌手，第二层及以下识别专辑；根或歌手层直属音频可记为散落音频。
+- 普通 `歌手/专辑/歌曲` 是一张专辑。
+- `专辑/CD1/歌曲`、`专辑/CD2/歌曲`、格式层 `WAV`/`FLAC`/`DSD`/`DFF` 应归并到父专辑。
+- 同一父目录下有多个纯数字且含音频的兄弟目录时，`专辑/01`、`专辑/02` 归并到父专辑。
+- `歌手/001/真实专辑/歌曲` 的 `001` 是编号壳，不应被误判为碟目录。
+- `专辑/01 第一首/track.flac`、`专辑/02 第二首/track.flac` 是逐曲文件夹，应归并到共同专辑。
+- `album`、`albums`、`专辑` 及合集/汇总/套装目录可作为容器线索。
+- `港版`、`日本版` 等版本目录不得静默合并，应标记边界需确认。
+- 忽略隐藏项目、macOS 包和符号链接，避免越界与递归循环。
+
+性能约束：发现阶段找到的音频 URL 应传给专辑扫描复用；已有有效图片封面时不要提取内嵌 artwork；并发结果不得导致 UI 顺序随机变化。
+
+## 名称清洗规则
+
+- 所有专辑无论封面状态，展示和搜索都先走 `AlbumNameCleaning`/`AlbumDisplayNameCleaning`；不要在目录链路、UI 或 Ollama 实现中再维护另一套正则。
+- 清洗只影响派生名称，不修改 `AlbumScanRecord` 的真实路径、相对路径、音频标签、扫描边界或封面位置。
+- `artistName` 与 `albumName` 使用字段专属规则。
+- 音频标签仅在非空值达到 `70%` 稳定多数且规范化候选被原始目录名包含时，才可辅助展示名。
+- `CDImage`、`Unknown Album`、`未知专辑` 等占位值计入多数票分母，但不能成为候选。
+- Ollama 已提供的建议优先于标签候选，但建议仍须经过统一确定性清洗。
+- 必须保留有语义的数字和标点，如 `1989`、`No.1`、`24K Magic`、`J-GAME`、`AC/DC`、`Blink-182`、`A-ha`、`家 III`。
+- 新规则必须有真实正例、易误伤反例和幂等性测试。
+
+全库审计：
+
+```shell
+zsh Scripts/audit_album_name_cleaning.sh '<扫描快照.db>'
+```
+
+目标：遍历全部音频文件名；标签候选匹配率至少 `98%`，结构噪声残余不高于 `2%`，空输出和幂等失败均为 `0`。2026-07-10 华语快照基线为 4,867 张专辑、68,525 个文件名，结构噪声残余 10/4,458（0.2243%），专辑/歌手稳定标签匹配 100%；详见 `docs/analysis/2026-07-10-library-filename-audit.md`。
+
+## UI 交互约束
+
+- `selectedLibraryID` 只表示详情区当前显示的单个音乐库；侧栏多选状态留在 `LibraryHomeView`，不要塞进 `AppModel`。
+- 单击单选、`Shift` 连选、`Cmd` 切换、`Cmd+A` 全选；批量移除只删 CoverDrop 本地记录，不删除真实音乐文件。
+- 正在扫描的音乐库禁止移除；重命名只改 `LibraryRecord.displayName`。
+- 底部筛选栏覆盖在封面墙上，不用 `safeAreaInset` 顶起内容；封面墙延伸到玻璃栏后方。
+- 选中筛选项为蓝色胶囊白字；按钮命中区域贴合视觉尺寸。蓝色只用于选中和状态提示，阴影以深灰为主。
+- 搜索默认收起；切换筛选项时收起但不清空查询。有查询时放大镜保留轻微蓝色提示。
+- 筛选切换按标签顺序左右滑动；详情进出使用轻微缩放/淡入淡出；卡片 hover 只做小幅缩放和阴影。
+- 固定格式控件需有稳定尺寸，任何桌面窗口尺寸下文字、按钮和封面卡不得重叠或因动态内容跳动。
+
+## 测试策略
+
+修改范围与重点测试：
+
+- 扫描边界/并发：`CoverDropTests/Integration/FileSystemLibraryScannerTests.swift`
+- TagLib 标签：`CoverDropTests/Integration/TagLibMetadataReaderTests.swift`
+- AppModel、实时刷新、封面保存、Ollama 队列：`CoverDropTests/Unit/AppModelImportTests.swift`
+- 名称清洗：`AlbumNameCleaningTests.swift`、`AlbumDisplayNameCleaningTests.swift`、`AlbumNameEnhancementTests.swift`
+- 快照：`SQLiteScanSnapshotStoreTests.swift` 和 `FileScanSnapshotStoreTests.swift`
+- 封面图片链路：`ImageIOCoverDetectorTests.swift`、`ImageIOCoverImageWriterTests.swift` 及各缓存/拖拽单测。
+- 封面墙布局：`FixedCoverGridLayoutTests.swift`。
+
+高价值性能回归用例包括：
 
 - `FileSystemLibraryScannerTests.scansAlbumsWithBoundedConcurrency`
 - `FileSystemLibraryScannerTests.imageFileCoverSkipsEmbeddedArtworkMetadataRead`
 - `AppModelImportTests.realtimeRefreshRescansChangedAlbumsConcurrently`
 - `AppModelImportTests.savingCoverInsideAppDoesNotTriggerRealtimeRefresh`
 
-## Ollama 名称增强边界
-
-本地 LLM 第一阶段目标：
-
-- 扫描完成后自动调用 Ollama。
-- 根据路径、原始歌手名、原始专辑名、前若干首曲目和标签，生成展示用 `artistName` 与 `albumName`。
-- 封面墙、详情主标题、搜索词优先使用增强名。
-- 详情页仍保留原始扫描名和路径，方便排查。
-- 失败时中文警告，回退原始扫描名。
-
-默认配置：
-
-- `baseURL = "http://localhost:11434"`
-- `model = "qwen3:14b"`
-- `stream = false`
-- 输出必须是严格 JSON：`{"artistName":"...","albumName":"..."}`
-
-禁止：
-
-- 不要让 LLM 决定专辑边界。
-- 不要让 LLM 改真实目录、音频标签或 `cover.jpg` 保存位置。
-- 不要把 LLM 输出写入音乐文件。
-
-## 扫描快照持久化
-
-当前默认快照实现是 `CoverDrop/Infrastructure/Persistence/SQLiteScanSnapshotStore.swift`，由 `AppEnvironment.live` 注入。旧的 `FileScanSnapshotStore` 仍保留，用于兼容读取历史 JSON `.db` 快照和相关回归测试。
-
-持久化边界：
-
-- `Features` 不直接依赖 SQLite，只通过 `AppModel` 和 `ScanSnapshotStoring`/`StreamingScanSnapshotStoring` 使用快照。
-- 新扫描结果保存为真实 SQLite 文件，稳定文件名沿用音乐库路径和目录角色生成，重复扫描覆盖同一个库的当前快照。
-- 加载历史快照时优先走 SQLite 表结构；如果发现不是 SQLite 快照，则回退旧 JSON 读取。
-- 流式加载以 `albums` 表 `COUNT(*)` 作为总数，按固定批次加载专辑，并通过 `ScanSnapshotLoadProgress` 更新 `已加载 xxx/xxx 张专辑`。
-- SQLite schema 当前只做 `ScanSnapshot.currentSchemaVersion` 的建表和校验；未来改 schema 必须增加迁移或兼容测试。
-
-测试重点：
-
-- `SQLiteScanSnapshotStoreTests`：SQLite 保存/读取/覆盖、流式进度、旧 JSON 兼容、库路径不匹配。
-- `FileScanSnapshotStoreTests`：保留旧 JSON 快照行为，避免兼容层回归。
-
-## UI 现状
-
-主要文件：
-
-- `CoverDrop/Features/LibraryHome/LibraryHomeView.swift`：音乐库侧边栏、主页面、扫描入口、音乐库多选和右键菜单。
-- `CoverDrop/Features/LibraryHome/LibraryScanSummaryView.swift`：封面墙、专辑详情、搜索页。
-
-当前 UI 还没有拆成 `CoverWall`、`AlbumDetail`、`Anomalies` 多个 feature 目录，大量封面墙和详情页代码仍集中在一个文件里。做大改前先规划拆分边界，避免顺手重构影响功能。
-
-封面墙当前交互约定：
-
-- 底部筛选栏是覆盖在封面墙上的浮层，不使用 `safeAreaInset` 顶起内容；封面墙应延伸到标签栏后方，通过玻璃材质透出。
-- 底部筛选栏使用透亮液态玻璃风格，选中态为蓝色胶囊，文字白色；不要恢复橙色强调色。
-- 筛选标签固定同一宽高，点击/悬停命中区域贴合按钮视觉大小，避免整段空白都可点击。
-- 搜索默认收起为放大镜按钮，点击后展开；切换筛选标签时搜索栏收起但不清空 `query`。
-- 如果收起时仍有搜索词，放大镜保留轻微蓝色状态提示。
-- 筛选标签切换时，封面墙按标签顺序左右滑动：切到右侧标签从右进，切回左侧标签从左进。
-- 详情页打开/关闭使用轻微缩放和淡入淡出；专辑卡 hover 使用很小的缩放和阴影变化，不做夸张动画。
-- 底部栏、按钮和 hover 阴影以深灰为主，蓝色只用于选中态和状态提示，避免大面积蓝色外发光。
-
-音乐库列表交互约定：
-
-- `selectedLibraryID` 仍表示详情区当前显示的单个音乐库。
-- 侧边栏多选状态在 `LibraryHomeView` 内维护，不进入 `AppModel`。
-- 多选菜单里的移除和重扫通过 `AppModel.removeLibraries(ids:)`、`AppModel.scanLibraries(ids:)` 执行。
-- 重命名只允许单选目标，写回 `LibraryRecord.displayName`，不修改真实目录名。
-- 正在扫描的音乐库禁止移除，避免扫描状态和监听状态损坏。
-
-搜索页当前设计：
-
-- 左侧是 `WKWebView`。
-- 右侧是搜索源、专辑信息、封面预览、拖图区域和返回按钮。
-- 图片拖入封面方块后自动回到详情页，仍需用户点保存才写入 `cover.jpg`。
-- 保存按钮只在真实 `cover.jpg` 写入成功后清除待保存状态；找不到专辑目录时只提示错误，不丢弃用户已拖入的待保存图片。
-
-## 验证要求
-
-代码改动交付前默认运行：
+交付检查：
 
 ```shell
 git diff --check
 zsh Scripts/verify.sh
 ```
 
-如果只是新增或修改文档，可至少运行 `git diff --check`，并在交付时说明未跑完整测试的原因。
+仅修改文档时可只运行 `git diff --check`，交付时说明未跑完整测试。测试失败必须先查明原因，不能通过删除测试、放宽断言或绕过生产路径掩盖。
 
-`Scripts/verify.sh` 使用独立 DerivedData 执行 clean test。失败必须先修复再交付。
+## 修改纪律与后续方向
 
-## 并行会话和工作区注意事项
+- 保持改动集中在请求涉及的模块；不要顺手重写 `LibraryScanSummaryView` 或 `AppModel`。
+- 新增基础设施能力时先在 `Domain/Protocols` 定义边界，再由 `AppEnvironment` 装配并在测试中注入假实现。
+- 涉及扫描、名称、快照或封面写入的行为变化，应先补回归测试再改实现。
+- 用户确认代码达到要求后，更新本文件，使下一次 AI 接手时看到的是当前事实。
 
-这个项目经常由多个 Codex 会话并行修改同一个工作区。开始实干前必须先看：
-
-```shell
-git status --short
-```
-
-规则：
-
-- 不要回滚用户或其它会话已有改动。
-- 不要使用 `git reset --hard` 或 `git checkout --` 清理工作区。
-- 如果需要新实现会话，优先使用 `create_thread`，不要 fork，除非用户明确同意。
-- 主会话负责架构判断和任务拆分；新会话只按明确边界实干。
-- 如果发现别的会话正在改同一文件，先暂停并向用户说明冲突风险。
-
-## 下一阶段方向
-
-优先级建议：
-
-1. 继续提高扫描准确率，沉淀真实目录样本和回归测试。
-2. 稳定 Ollama 名称增强，让模型只做展示和搜索辅助。
-3. 做“需确认”工作台，允许用户确认、合并或拆分扫描结果。
-4. 在 SQLite 快照基础上做更细粒度的历史记录、迁移策略和确认结果保存。
+推荐后续方向：继续用真实目录样本提高扫描准确率；稳定名称清洗和手动 Ollama 工作流；建设“需确认”工作台；为 SQLite schema 增加明确迁移策略与确认结果持久化。
