@@ -49,6 +49,15 @@ struct ITunesCoverSearchClientTests {
         #expect(results.isEmpty)
     }
 
+    @Test("iTunes JSON 在后台解析")
+    func decodesResultsOffMainActor() async throws {
+        let results = try await ITunesCoverSearchClient.decodeResultsOffMainActor(
+            from: Data(Self.fixture.utf8)
+        )
+
+        #expect(results.count == 1)
+    }
+
     @Test("iTunes 错误会提供中文说明")
     func failureDescriptionsAreChinese() {
         #expect(ITunesCoverSearchClient.Failure.badHTTPStatus(500).errorDescription == "iTunes 搜索失败：HTTP 500。")

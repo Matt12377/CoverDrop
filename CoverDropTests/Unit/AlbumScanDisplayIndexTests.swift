@@ -3,6 +3,90 @@ import Testing
 @testable import CoverDrop
 
 struct AlbumScanDisplayIndexTests {
+    @Test("全量封面墙索引在主 Actor 之外构建")
+    @MainActor
+    func fullIndexBuildRunsOffMainActor() async {
+        let album = makeAlbum(index: 1, hasCover: true, issues: [])
+        let threadRecorder = ThreadRecorder()
+        let presentation = AlbumCoverCardPresentation(
+            id: album.id,
+            folderURL: album.folderURL,
+            displayArtistName: album.artistName,
+            displayAlbumName: album.albumName,
+            formatTags: [],
+            coverURL: album.displayedCover?.displayURL,
+            contentRevision: 1,
+            coverSourceName: album.displayedCover?.source.displayName,
+            needsAttention: album.needsAttention,
+            issueHelp: nil,
+            canSplitWithXLD: false,
+            hasEnhancedName: false,
+            enhancementErrorMessage: nil
+        )
+
+        let index = await AppModel.buildScanDisplayIndexOffMainActor(
+            result: LibraryScanResult(albums: [album], looseAudioPaths: []),
+            failedAlbumIDs: []
+        ) { _, _ in
+            threadRecorder.record(isMainThread: Thread.isMainThread)
+            return presentation
+        }
+
+        #expect(index.stats.albumCount == 1)
+        #expect(threadRecorder.recordedMainThreadValues == [false])
+    }
+
+    @Test("五千张专辑只计算一次卡片展示数据并复用快照存储")
+    func coverWallSnapshotCachesPresentations() {
+        let albums = (0..<5_000).map { index in
+            makeAlbum(index: index, hasCover: index.isMultiple(of: 2), issues: [])
+        }
+        var presentationCount = 0
+        let index = AlbumScanDisplayIndex(
+            result: LibraryScanResult(albums: albums, looseAudioPaths: []),
+            makePresentation: { album, revision in
+                presentationCount += 1
+                return makePresentation(album: album, contentRevision: revision)
+            }
+        )
+
+        let first = index.coverWallSnapshot(filter: .all, query: "")
+        let second = index.coverWallSnapshot(filter: .all, query: "")
+
+        #expect(first.cards.count == 5_000)
+        #expect(presentationCount == 5_000)
+        #expect(first.storageIdentity == second.storageIdentity)
+    }
+
+    @Test("批量替换只重算目标专辑的卡片展示数据")
+    func replacingAlbumsRebuildsOnlyTargets() {
+        let first = makeAlbum(index: 1, hasCover: false, issues: [])
+        let second = makeAlbum(index: 2, hasCover: false, issues: [])
+        let third = makeAlbum(index: 3, hasCover: false, issues: [])
+        var callsByAlbumID: [AlbumScanRecord.ID: Int] = [:]
+        let index = AlbumScanDisplayIndex(
+            result: LibraryScanResult(albums: [first, second, third], looseAudioPaths: []),
+            makePresentation: { album, revision in
+                callsByAlbumID[album.id, default: 0] += 1
+                return makePresentation(album: album, contentRevision: revision)
+            }
+        )
+        let initial = index.coverWallSnapshot(filter: .all, query: "")
+        let thirdRevision = initial.cards.first { $0.id == third.id }?.contentRevision
+
+        _ = index.replacingAlbums([
+            makeAlbum(index: 1, hasCover: true, issues: []),
+            makeAlbum(index: 2, hasCover: true, issues: [])
+        ])
+        let updated = index.coverWallSnapshot(filter: .all, query: "")
+
+        #expect(callsByAlbumID[first.id] == 2)
+        #expect(callsByAlbumID[second.id] == 2)
+        #expect(callsByAlbumID[third.id] == 1)
+        #expect(updated.cards.first { $0.id == third.id }?.contentRevision == thirdRevision)
+        #expect(updated.storageIdentity != initial.storageIdentity)
+    }
+
     @Test("五万张专辑下索引查找统计筛选和无命中搜索均低于 100ms")
     func fiftyThousandAlbumReadsStayUnderInteractionBudget() {
         let result = LibraryScanResult(
@@ -165,5 +249,41 @@ struct AlbumScanDisplayIndexTests {
             ) : nil,
             issues: issues
         )
+    }
+
+    private func makePresentation(
+        album: AlbumScanRecord,
+        contentRevision: UInt64
+    ) -> AlbumCoverCardPresentation {
+        AlbumCoverCardPresentation(
+            id: album.id,
+            folderURL: album.folderURL,
+            displayArtistName: album.artistName,
+            displayAlbumName: album.albumName,
+            formatTags: Array(Set(album.audioFiles.map { $0.format.uppercased() })).sorted(),
+            coverURL: album.displayedCover?.displayURL,
+            contentRevision: contentRevision,
+            coverSourceName: album.displayedCover?.source.displayName,
+            needsAttention: album.needsAttention,
+            issueHelp: album.issues.map(\.displayName).joined(separator: "\n"),
+            canSplitWithXLD: false,
+            hasEnhancedName: false,
+            enhancementErrorMessage: nil
+        )
+    }
+}
+
+private nonisolated final class ThreadRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [Bool] = []
+
+    var recordedMainThreadValues: [Bool] {
+        lock.withLock { values }
+    }
+
+    func record(isMainThread: Bool) {
+        lock.withLock {
+            values.append(isMainThread)
+        }
     }
 }

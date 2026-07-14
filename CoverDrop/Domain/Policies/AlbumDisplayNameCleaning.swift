@@ -88,13 +88,20 @@ enum AlbumDisplayNameCleaning {
         cleanedBy clean: (String) -> String,
         rejectsPlaceholder: Bool
     ) -> String? {
+        var cleanedValueCache: [String: (key: String, value: String)] = [:]
+        cleanedValueCache.reserveCapacity(min(values.count, 16))
         let cleanedValues = values.compactMap { value -> (key: String, value: String)? in
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return nil }
+            if let cached = cleanedValueCache[trimmed] {
+                return cached
+            }
             let cleaned = clean(trimmed)
             let key = AlbumNameCleaning.canonicalKey(cleaned)
             guard !key.isEmpty else { return nil }
-            return (key, cleaned)
+            let cached = (key: key, value: cleaned)
+            cleanedValueCache[trimmed] = cached
+            return cached
         }
 
         guard !cleanedValues.isEmpty else { return nil }

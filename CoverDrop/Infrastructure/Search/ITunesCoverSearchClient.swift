@@ -44,7 +44,7 @@ struct ITunesCoverSearchClient: CoverSearching {
             throw Failure.badHTTPStatus(httpResponse.statusCode)
         }
 
-        return try Self.decodeResults(from: data)
+        return try await Self.decodeResultsOffMainActor(from: data)
     }
 
     static func searchURL(
@@ -65,7 +65,7 @@ struct ITunesCoverSearchClient: CoverSearching {
         return components.url
     }
 
-    static func decodeResults(from data: Data) throws -> [CoverSearchResult] {
+    nonisolated static func decodeResults(from data: Data) throws -> [CoverSearchResult] {
         do {
             let response = try JSONDecoder().decode(ITunesSearchResponse.self, from: data)
             return response.results.compactMap { item in
@@ -76,18 +76,35 @@ struct ITunesCoverSearchClient: CoverSearching {
         }
     }
 
-    static func largeArtworkURL(from url: URL) -> URL {
+    nonisolated static func decodeResultsOffMainActor(
+        from data: Data
+    ) async throws -> [CoverSearchResult] {
+        try await Task.detached(priority: .userInitiated) {
+            try decodeResults(from: data)
+        }.value
+    }
+
+    nonisolated static func largeArtworkURL(from url: URL) -> URL {
         url
             .deletingLastPathComponent()
             .appendingPathComponent("1200x1200bb.jpg")
     }
 }
 
-private struct ITunesSearchResponse: Decodable {
+private struct ITunesSearchResponse: Decodable, Sendable {
     let results: [ITunesAlbumResult]
+
+    private enum CodingKeys: String, CodingKey {
+        case results
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        results = try container.decode([ITunesAlbumResult].self, forKey: .results)
+    }
 }
 
-private struct ITunesAlbumResult: Decodable {
+private struct ITunesAlbumResult: Decodable, Sendable {
     let collectionType: String?
     let collectionId: Int?
     let artistName: String?
@@ -95,7 +112,26 @@ private struct ITunesAlbumResult: Decodable {
     let collectionViewUrl: URL?
     let artworkUrl100: URL?
 
-    var coverSearchResult: CoverSearchResult? {
+    private enum CodingKeys: String, CodingKey {
+        case collectionType
+        case collectionId
+        case artistName
+        case collectionName
+        case collectionViewUrl
+        case artworkUrl100
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        collectionType = try container.decodeIfPresent(String.self, forKey: .collectionType)
+        collectionId = try container.decodeIfPresent(Int.self, forKey: .collectionId)
+        artistName = try container.decodeIfPresent(String.self, forKey: .artistName)
+        collectionName = try container.decodeIfPresent(String.self, forKey: .collectionName)
+        collectionViewUrl = try container.decodeIfPresent(URL.self, forKey: .collectionViewUrl)
+        artworkUrl100 = try container.decodeIfPresent(URL.self, forKey: .artworkUrl100)
+    }
+
+    nonisolated var coverSearchResult: CoverSearchResult? {
         guard collectionType == nil || collectionType == "Album",
               let collectionId,
               let artistName,

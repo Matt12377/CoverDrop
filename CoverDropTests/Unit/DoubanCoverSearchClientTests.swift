@@ -46,6 +46,15 @@ struct DoubanCoverSearchClientTests {
         #expect(results.isEmpty)
     }
 
+    @Test("豆瓣 HTML 和 JSON 在后台解析")
+    func decodesResultsOffMainActor() async throws {
+        let results = try await DoubanCoverSearchClient.decodeResultsOffMainActor(
+            from: Data(Self.fixture.utf8)
+        )
+
+        #expect(results.count == 1)
+    }
+
     @Test("豆瓣错误会提供中文说明")
     func failureDescriptionsAreChinese() {
         #expect(DoubanCoverSearchClient.Failure.badHTTPStatus(403).errorDescription == "豆瓣搜索失败：HTTP 403。")

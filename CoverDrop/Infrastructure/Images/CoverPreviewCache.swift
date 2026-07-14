@@ -64,6 +64,24 @@ enum CoverPreviewCache {
 
     nonisolated static func cachedImage(for sourceURL: URL, maxPixelSize: CGFloat = 300) -> NSImage? {
         let cacheKey = imageCacheKey(for: sourceURL, maxPixelSize: maxPixelSize)
+        return cachedImage(for: sourceURL, maxPixelSize: maxPixelSize, cacheKey: cacheKey)
+    }
+
+    nonisolated static func cachedImage(
+        for sourceURL: URL,
+        maxPixelSize: CGFloat,
+        contentRevision: UInt64
+    ) -> NSImage? {
+        let fileCacheKey = imageCacheKey(for: sourceURL, maxPixelSize: maxPixelSize)
+        let cacheKey = "\(fileCacheKey)|revision:\(contentRevision)"
+        return cachedImage(for: sourceURL, maxPixelSize: maxPixelSize, cacheKey: cacheKey)
+    }
+
+    nonisolated private static func cachedImage(
+        for sourceURL: URL,
+        maxPixelSize: CGFloat,
+        cacheKey: String
+    ) -> NSImage? {
         let key = cacheKey as NSString
         if let cached = imageCache.object(forKey: key) {
             return cached

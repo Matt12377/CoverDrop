@@ -1,6 +1,6 @@
 import Foundation
 
-struct ScanSnapshot: Codable, Equatable, Sendable {
+nonisolated struct ScanSnapshot: Codable, Equatable, Sendable {
     nonisolated static let currentSchemaVersion = 2
 
     let schemaVersion: Int
@@ -25,7 +25,7 @@ struct ScanSnapshot: Codable, Equatable, Sendable {
 }
 
 extension ScanSnapshot {
-    struct Library: Codable, Equatable, Sendable {
+    nonisolated struct Library: Codable, Equatable, Sendable {
         let id: UUID
         let displayName: String
         let rootPath: String
@@ -51,7 +51,7 @@ extension ScanSnapshot {
         }
     }
 
-    struct Result: Codable, Equatable, Sendable {
+    nonisolated struct Result: Codable, Equatable, Sendable {
         let albums: [Album]
         let looseAudioPaths: [String]
 
@@ -76,7 +76,7 @@ extension ScanSnapshot {
         }
     }
 
-    struct Album: Codable, Equatable, Sendable {
+    nonisolated struct Album: Codable, Equatable, Sendable {
         let folderPath: String
         let artistName: String
         let albumName: String
@@ -147,7 +147,7 @@ extension ScanSnapshot {
         }
     }
 
-    struct AudioFile: Codable, Equatable, Sendable {
+    nonisolated struct AudioFile: Codable, Equatable, Sendable {
         let path: String
         let relativePath: String
         let format: String
@@ -187,7 +187,7 @@ extension ScanSnapshot {
         }
     }
 
-    struct CueSheet: Codable, Equatable, Sendable {
+    nonisolated struct CueSheet: Codable, Equatable, Sendable {
         let path: String
         let relativePath: String
 
@@ -212,7 +212,7 @@ extension ScanSnapshot {
         }
     }
 
-    struct Metadata: Codable, Equatable, Sendable {
+    nonisolated struct Metadata: Codable, Equatable, Sendable {
         let title: String?
         let artist: String?
         let albumArtist: String?
@@ -267,7 +267,7 @@ extension ScanSnapshot {
         }
     }
 
-    struct Cover: Codable, Equatable, Sendable {
+    nonisolated struct Cover: Codable, Equatable, Sendable {
         let path: String
         let previewPath: String?
         let relativePath: String
@@ -312,7 +312,7 @@ extension ScanSnapshot {
         }
     }
 
-    enum Source: String, Codable, Equatable, Sendable {
+    nonisolated enum Source: String, Codable, Equatable, Sendable {
         case file
         case embeddedArtwork
 
@@ -335,7 +335,7 @@ extension ScanSnapshot {
         }
     }
 
-    struct Issue: Codable, Equatable, Sendable {
+    nonisolated struct Issue: Codable, Equatable, Sendable {
         enum Kind: String, Codable, Sendable {
             case singleFileNeedsConfirmation
             case metadataReadFailed
@@ -409,7 +409,7 @@ extension ScanSnapshot {
         }
     }
 
-    struct AlbumNameEnhancement: Codable, Equatable, Sendable {
+    nonisolated struct AlbumNameEnhancement: Codable, Equatable, Sendable {
         let suggestionsByAlbumPath: [String: Suggestion]
         let status: Status?
 
@@ -434,7 +434,7 @@ extension ScanSnapshot {
         }
     }
 
-    struct Suggestion: Codable, Equatable, Sendable {
+    nonisolated struct Suggestion: Codable, Equatable, Sendable {
         let artistName: String
         let albumName: String
 
@@ -456,7 +456,7 @@ extension ScanSnapshot {
         }
     }
 
-    struct Status: Codable, Equatable, Sendable {
+    nonisolated struct Status: Codable, Equatable, Sendable {
         let isRunning: Bool
         let lastErrorMessage: String?
 

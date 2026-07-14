@@ -86,6 +86,22 @@ struct AppConfiguration: Equatable, Sendable {
         }
     }
 
+    struct CoverImages: Equatable, Sendable {
+        nonisolated static let defaultConcurrentLocalThumbnails = 4
+        nonisolated static let defaultConcurrentRemotePreviews = 6
+
+        let maxConcurrentLocalThumbnails: Int
+        let maxConcurrentRemotePreviews: Int
+
+        init(
+            maxConcurrentLocalThumbnails: Int = Self.defaultConcurrentLocalThumbnails,
+            maxConcurrentRemotePreviews: Int = Self.defaultConcurrentRemotePreviews
+        ) {
+            self.maxConcurrentLocalThumbnails = max(1, maxConcurrentLocalThumbnails)
+            self.maxConcurrentRemotePreviews = max(1, maxConcurrentRemotePreviews)
+        }
+    }
+
     struct CoverSearchSource: Identifiable, Equatable, Sendable {
         enum Kind: Equatable, Sendable {
             case aggregate
@@ -176,6 +192,7 @@ struct AppConfiguration: Equatable, Sendable {
     let scan: Scan
     let scanDatabases: ScanDatabases
     let realtimeScanRefresh: RealtimeScanRefresh
+    let coverImages: CoverImages
     let coverSearch: CoverSearch
     let localLLM: LocalLLM
 
@@ -183,12 +200,14 @@ struct AppConfiguration: Equatable, Sendable {
         scan: Scan = Scan(),
         scanDatabases: ScanDatabases = ScanDatabases(),
         realtimeScanRefresh: RealtimeScanRefresh = RealtimeScanRefresh(),
+        coverImages: CoverImages = CoverImages(),
         coverSearch: CoverSearch = CoverSearch(),
         localLLM: LocalLLM = LocalLLM()
     ) {
         self.scan = scan
         self.scanDatabases = scanDatabases
         self.realtimeScanRefresh = realtimeScanRefresh
+        self.coverImages = coverImages
         self.coverSearch = coverSearch
         self.localLLM = localLLM
     }

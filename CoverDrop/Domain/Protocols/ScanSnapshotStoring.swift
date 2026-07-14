@@ -64,6 +64,15 @@ protocol StreamingScanSnapshotStoring: ScanSnapshotStoring {
     ) async throws -> ScanSnapshot
 }
 
+protocol AlbumCoverSnapshotUpdating: Sendable {
+    func updateAlbumCover(
+        _ cover: ScanSnapshot.Cover?,
+        forAlbumID albumID: AlbumScanRecord.ID,
+        at fileURL: URL,
+        expectedLibrary: LibraryRecord
+    ) async throws -> ScanSnapshotSummary
+}
+
 struct DisabledScanSnapshotStore: ScanSnapshotStoring {
     func saveNewSnapshot(_ snapshot: ScanSnapshot) async throws -> ScanSnapshotSummary {
         throw DisabledScanSnapshotStoreError()

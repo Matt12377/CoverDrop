@@ -22,10 +22,27 @@ struct ImageIOCoverImageWriter: CoverImageWriting {
         toAlbumFolder albumFolderURL: URL
     ) async throws -> URL {
         return try await Task.detached(priority: .userInitiated) {
-            try Self.writeCoverImageSynchronously(
-                from: sourceURL,
-                toAlbumFolder: albumFolderURL
+            let performanceSpan = CoverDropPerformanceLog.begin(
+                CoverDropPerformanceOperation.saveCoverImage,
+                context: [
+                    "phase": "writer",
+                    "sourceExtension": sourceURL.pathExtension.lowercased()
+                ]
             )
+            do {
+                let writtenURL = try Self.writeCoverImageSynchronously(
+                    from: sourceURL,
+                    toAlbumFolder: albumFolderURL
+                )
+                performanceSpan?.finish()
+                return writtenURL
+            } catch {
+                performanceSpan?.finish(
+                    outcome: .failure,
+                    context: ["error": error.localizedDescription]
+                )
+                throw error
+            }
         }.value
     }
 
@@ -38,6 +55,8 @@ struct ImageIOCoverImageWriter: CoverImageWriting {
         ] as CFDictionary
         guard let source = CGImageSourceCreateWithURL(sourceURL as CFURL, sourceOptions),
               CGImageSourceGetCount(source) > 0,
+              CGImageSourceGetStatus(source) == .statusComplete,
+              CGImageSourceGetStatusAtIndex(source, 0) == .statusComplete,
               let image = CGImageSourceCreateImageAtIndex(source, 0, sourceOptions) else {
             throw Failure.unreadableImage
         }
@@ -49,7 +68,11 @@ struct ImageIOCoverImageWriter: CoverImageWriting {
         )
 
         do {
-            try writeJPEG(image, to: temporaryURL)
+            if CGImageSourceGetType(source) as String? == UTType.jpeg.identifier {
+                try FileManager.default.copyItem(at: sourceURL, to: temporaryURL)
+            } else {
+                try writeJPEG(image, to: temporaryURL)
+            }
             if FileManager.default.fileExists(atPath: destinationURL.path) {
                 _ = try FileManager.default.replaceItemAt(
                     destinationURL,

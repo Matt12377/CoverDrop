@@ -36,90 +36,101 @@ enum CoverImageStagingCache {
     }
 
     nonisolated static let maxRemoteImageBytes = 20 * 1024 * 1024
+    nonisolated private static let remoteImageDataCache = RemoteCoverImageDataCache()
 
     nonisolated static func stageImageData(
         _ data: Data,
         suggestedExtension: String? = nil
     ) throws -> URL {
-        try validateImageData(data)
+        let performanceSpan = CoverDropPerformanceLog.begin(
+            CoverDropPerformanceOperation.stageCoverImage,
+            context: [
+                "bytes": "\(data.count)",
+                "phase": "validate_and_write"
+            ]
+        )
+        do {
+            try validateImageData(data)
 
-        let directory = try pendingCoverDirectory()
-        let fileExtension = normalizedImageExtension(suggestedExtension)
-        let stagedURL = directory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension(fileExtension)
+            let directory = try pendingCoverDirectory()
+            let fileExtension = normalizedImageExtension(suggestedExtension)
+            let stagedURL = directory
+                .appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension(fileExtension)
 
-        try data.write(to: stagedURL, options: .atomic)
-        return stagedURL
+            try data.write(to: stagedURL, options: .atomic)
+            performanceSpan?.finish(context: ["extension": fileExtension])
+            return stagedURL
+        } catch {
+            performanceSpan?.finish(
+                outcome: .failure,
+                context: ["error": error.localizedDescription]
+            )
+            throw error
+        }
     }
 
     nonisolated static func stageRemoteImage(at url: URL) async throws -> URL {
+        let performanceSpan = CoverDropPerformanceLog.begin(
+            CoverDropPerformanceOperation.stageCoverImage,
+            context: ["host": url.host(percentEncoded: false) ?? "unknown", "phase": "remote"]
+        )
         guard ["http", "https"].contains(url.scheme?.lowercased()) else {
             CoverDropDebugLog.write("封面下载：拒绝非 http/https URL：\(url.absoluteString)")
+            performanceSpan?.finish(
+                outcome: .failure,
+                context: ["error": "unsupported_url"]
+            )
             throw Failure.unsupportedRemoteURL
         }
 
-        let request = remoteImageRequest(for: url)
-        CoverDropDebugLog.write(
-            "封面下载：开始请求 \(url.absoluteString)，UA=\(request.value(forHTTPHeaderField: "User-Agent") ?? "")，Referer=\(request.value(forHTTPHeaderField: "Referer") ?? "无")"
-        )
-
-        let urlResponse: URLResponse
-        let data: Data
         do {
-            (data, urlResponse) = try await URLSession.shared.data(for: request)
-        } catch {
-            let reason = networkFailureDescription(for: error)
-            CoverDropDebugLog.write("封面下载：请求失败，URL=\(url.absoluteString)，原因=\(reason)")
-            throw Failure.remoteDownloadFailed(reason)
-        }
-
-        guard let response = urlResponse as? HTTPURLResponse else {
-            CoverDropDebugLog.write("封面下载：响应不是 HTTPURLResponse，URL=\(url.absoluteString)")
-            throw Failure.nonHTTPResponse
-        }
-
-        let mimeType = response.mimeType?.lowercased()
-        CoverDropDebugLog.write(
-            "封面下载：收到响应，URL=\(url.absoluteString)，状态码=\(response.statusCode)，MIME=\(mimeType ?? "无")，大小=\(data.count) bytes"
-        )
-
-        guard (200 ..< 400).contains(response.statusCode) else {
-            let reason = remoteDownloadFailureReason(
-                statusCode: response.statusCode,
-                url: url,
-                request: request,
-                data: data
-            )
-            CoverDropDebugLog.write("封面下载：失败，URL=\(url.absoluteString)，原因=\(reason)")
-            throw Failure.remoteDownloadFailed(reason)
-        }
-
-        if data.count > maxRemoteImageBytes {
-            CoverDropDebugLog.write(
-                "封面下载：失败，URL=\(url.absoluteString)，原因=图片过大 \(data.count) bytes，限制=\(maxRemoteImageBytes) bytes"
-            )
-            throw Failure.imageTooLarge
-        }
-
-        if let mimeType, !mimeType.hasPrefix("image/") {
-            CoverDropDebugLog.write("封面下载：失败，URL=\(url.absoluteString)，原因=非图片 MIME \(mimeType)")
-            throw Failure.nonImageResponse(mimeType)
-        }
-
-        do {
-            let stagedURL = try stageImageData(
-                data,
-                suggestedExtension: imageExtension(from: url, mimeType: mimeType)
-            )
+            let data = try await remoteImageData(for: url)
+            let suggestedExtension = imageExtension(from: url, mimeType: nil)
+            let stagedURL = try await runStagingWorkOffMainActor {
+                try stageImageData(data, suggestedExtension: suggestedExtension)
+            }
             CoverDropDebugLog.write("封面下载：图片验证和缓存写入成功，URL=\(url.absoluteString)，缓存=\(stagedURL.path)")
+            performanceSpan?.finish(context: ["bytes": "\(data.count)"])
             return stagedURL
         } catch {
             CoverDropDebugLog.write(
                 "封面下载：图片验证或缓存写入失败，URL=\(url.absoluteString)，原因=\(error.localizedDescription)"
             )
+            performanceSpan?.finish(
+                outcome: .failure,
+                context: ["error": error.localizedDescription]
+            )
             throw error
         }
+    }
+
+    nonisolated static func prefetchRemoteImage(at url: URL) async {
+        guard ["http", "https"].contains(url.scheme?.lowercased()) else { return }
+
+        do {
+            _ = try await remoteImageData(for: url)
+            CoverDropDebugLog.write("封面下载：预取完成，URL=\(url.absoluteString)")
+        } catch {
+            CoverDropDebugLog.write(
+                "封面下载：预取失败，URL=\(url.absoluteString)，原因=\(error.localizedDescription)"
+            )
+        }
+    }
+
+    nonisolated static func cachedRemoteImageData(
+        for url: URL,
+        load: @escaping RemoteCoverImageDataCache.Loader
+    ) async throws -> Data {
+        try await remoteImageDataCache.value(for: url, load: load)
+    }
+
+    nonisolated static func runStagingWorkOffMainActor<T: Sendable>(
+        _ work: @escaping @Sendable () throws -> T
+    ) async throws -> T {
+        try await Task.detached(priority: .userInitiated) {
+            try work()
+        }.value
     }
 
     nonisolated static func remoteImageRequest(for url: URL) -> URLRequest {
@@ -139,6 +150,60 @@ enum CoverImageStagingCache {
             CoverDropDebugLog.write("封面下载：为 \(url.host(percentEncoded: false) ?? "未知域名") 设置 Referer：\(referer)")
         }
         return request
+    }
+
+    nonisolated private static func remoteImageData(for url: URL) async throws -> Data {
+        let request = remoteImageRequest(for: url)
+        return try await cachedRemoteImageData(for: url) {
+            CoverDropDebugLog.write(
+                "封面下载：开始请求 \(url.absoluteString)，UA=\(request.value(forHTTPHeaderField: "User-Agent") ?? "")，Referer=\(request.value(forHTTPHeaderField: "Referer") ?? "无")"
+            )
+
+            let data: Data
+            let urlResponse: URLResponse
+            do {
+                (data, urlResponse) = try await URLSession.shared.data(for: request)
+            } catch {
+                let reason = networkFailureDescription(for: error)
+                CoverDropDebugLog.write("封面下载：请求失败，URL=\(url.absoluteString)，原因=\(reason)")
+                throw Failure.remoteDownloadFailed(reason)
+            }
+
+            guard let response = urlResponse as? HTTPURLResponse else {
+                CoverDropDebugLog.write("封面下载：响应不是 HTTPURLResponse，URL=\(url.absoluteString)")
+                throw Failure.nonHTTPResponse
+            }
+
+            let mimeType = response.mimeType?.lowercased()
+            CoverDropDebugLog.write(
+                "封面下载：收到响应，URL=\(url.absoluteString)，状态码=\(response.statusCode)，MIME=\(mimeType ?? "无")，大小=\(data.count) bytes"
+            )
+
+            guard (200 ..< 400).contains(response.statusCode) else {
+                let reason = remoteDownloadFailureReason(
+                    statusCode: response.statusCode,
+                    url: url,
+                    request: request,
+                    data: data
+                )
+                CoverDropDebugLog.write("封面下载：失败，URL=\(url.absoluteString)，原因=\(reason)")
+                throw Failure.remoteDownloadFailed(reason)
+            }
+
+            if data.count > maxRemoteImageBytes {
+                CoverDropDebugLog.write(
+                    "封面下载：失败，URL=\(url.absoluteString)，原因=图片过大 \(data.count) bytes，限制=\(maxRemoteImageBytes) bytes"
+                )
+                throw Failure.imageTooLarge
+            }
+
+            if let mimeType, !mimeType.hasPrefix("image/") {
+                CoverDropDebugLog.write("封面下载：失败，URL=\(url.absoluteString)，原因=非图片 MIME \(mimeType)")
+                throw Failure.nonImageResponse(mimeType)
+            }
+
+            return data
+        }
     }
 
     nonisolated static func imageReferer(for url: URL) -> String? {
@@ -252,5 +317,27 @@ enum CoverImageStagingCache {
         }
 
         return reason
+    }
+}
+
+struct LiveCoverImageStager: CoverImageStaging {
+    func stageImageData(
+        _ data: Data,
+        suggestedExtension: String?
+    ) async throws -> URL {
+        try await CoverImageStagingCache.runStagingWorkOffMainActor {
+            try CoverImageStagingCache.stageImageData(
+                data,
+                suggestedExtension: suggestedExtension
+            )
+        }
+    }
+
+    func stageRemoteImage(at remoteURL: URL) async throws -> URL {
+        try await CoverImageStagingCache.stageRemoteImage(at: remoteURL)
+    }
+
+    func prefetchRemoteImage(at remoteURL: URL) async {
+        await CoverImageStagingCache.prefetchRemoteImage(at: remoteURL)
     }
 }

@@ -143,6 +143,9 @@ private let libraryChangeEventCallback: FSEventStreamCallback = {
     eventFlags,
     _ in
     guard let clientCallBackInfo else { return }
+    let diagnosticsStartedAt: ContinuousClock.Instant? = CoverDropPerformanceLog.isEnabled(
+        environment: ProcessInfo.processInfo.environment
+    ) ? .now : nil
 
     let state = Unmanaged<FSEventsStreamState>
         .fromOpaque(clientCallBackInfo)
@@ -169,9 +172,15 @@ private let libraryChangeEventCallback: FSEventStreamCallback = {
         flags: filteredFlags
     )
 
-    CoverDropDebugLog.write(
-        "实时刷新：收到文件事件，根目录=\(state.rootURL.path)，原始事件数=\(numEvents)，过滤后=\(filteredPaths.count)，路径=\(filteredPaths.prefix(6).joined(separator: " | "))"
-    )
+    if let diagnosticsStartedAt {
+        let components = diagnosticsStartedAt.duration(to: .now).components
+        let elapsedMilliseconds = Double(components.seconds) * 1_000
+            + Double(components.attoseconds) / 1_000_000_000_000_000
+        let distinctFlags = Set(rawFlags).map(String.init).sorted().joined(separator: ",")
+        CoverDropDebugLog.write(
+            "实时刷新：收到文件事件，根目录=\(state.rootURL.path)，原始路径数=\(rawPaths.count)，原始 flags 数=\(rawFlags.count)，flags=\(distinctFlags)，过滤后=\(filteredPaths.count)，归属判定耗时=\(String(format: "%.2f", elapsedMilliseconds))ms，路径=\(filteredPaths.prefix(6).joined(separator: " | "))"
+        )
+    }
     state.yieldEvent(event)
     _ = streamRef
 }

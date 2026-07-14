@@ -82,10 +82,16 @@ Scripts                       验证和名称清洗审计脚本
 - `CoverDrop/Domain/Policies/AlbumNameCleaning.swift`：歌手名/专辑名确定性清洗。
 - `CoverDrop/Domain/Policies/AlbumDisplayNameCleaning.swift`：目录名、标签多数候选和 Ollama 建议的展示决策。
 - `CoverDrop/Domain/Policies/AlbumScanDisplayIndex.swift`：封面墙筛选、搜索和统计索引。
+- `CoverDrop/Domain/Models/AlbumCoverCardPresentation.swift`：封面墙轻量卡片数据、不可变快照和网格渲染键；不要把完整音频列表重新带回卡片热路径。
+- `CoverDrop/Domain/Models/AlbumCoverWorkflowPresentationState.swift`：专辑详情与封面搜索的内联目的地、稳定容器尺寸和 drop zone 策略。
+- `CoverDrop/Domain/Diagnostics/CoverDropPerformanceLog.swift`：受环境变量控制的低开销耗时记录和主线程停顿监测。
 - `CoverDrop/Infrastructure/Persistence/SQLiteScanSnapshotStore.swift`：当前 SQLite 快照实现。
+- `CoverDrop/Infrastructure/Persistence/ScanSnapshotUpdateQueue.swift`：按音乐库串行、FIFO 保留更新的快照持久化队列。
 - `CoverDrop/Infrastructure/Persistence/FileScanSnapshotStore.swift`：旧 JSON 快照兼容实现，不要随意删除。
+- `CoverDrop/Infrastructure/Images/CoverThumbnailLoader.swift`：本地封面缩略图的共享、去重、可取消、受限并发加载器。
+- `CoverDrop/Infrastructure/Images/RemoteCoverImageDataCache.swift`：远程封面数据的短期缓存、请求合并、取消和受限并发。
 - `CoverDrop/Features/LibraryHome/LibraryHomeView.swift`：音乐库侧栏、多选、导入和顶层页面。
-- `CoverDrop/Features/LibraryHome/LibraryScanSummaryView.swift`：封面墙、详情、搜索与拖图，当前超过 3000 行；大改前应先提出拆分边界，不要顺手全面重构。
+- `CoverDrop/Features/LibraryHome/LibraryScanSummaryView.swift`：封面墙、内联详情/搜索与拖图，当前超过 3000 行；大改前应先提出拆分边界，不要顺手全面重构，也不要把名称清洗、同步 I/O 或全量专辑派生重新放回 View 热路径。
 - `CoverDrop/Features/LibraryHome/FixedCoverGridLayout.swift`：封面墙固定网格列数/尺寸计算。
 
 ## 当前行为
@@ -103,10 +109,16 @@ Scripts                       验证和名称清洗审计脚本
 
 - 目录图片优先；没有有效图片时才读取并导出音频内嵌 artwork 作为缓存预览。
 - 常见封面名图片损坏时继续尝试内嵌图，并记录 `invalidNamedCovers`。
+- 封面墙由 `AlbumScanDisplayIndex` 预计算轻量 `AlbumCoverCardPresentation`，并按修订号、筛选项和规范化查询缓存 `AlbumCoverWallSnapshot`；卡片渲染不得逐张重新执行名称清洗或遍历完整音频列表。
+- 网格子树通过快照身份和 `AlbumCoverWallRenderKey` 隔离无关的 `AppModel` 发布；新增卡片状态时必须同步更新渲染键或单卡片数据，不能靠观察整个全局模型强制刷新。
+- 本地缩略图默认最多并发 `4` 个，远程预览默认最多并发 `6` 个；相同请求应共享任务，视图消失或请求变化时应可取消。图片校验、读取和解码不得同步阻塞主 actor。
 - 搜索源包括聚合搜索、豆瓣、Bing 图片和 Google 图片，默认“聚合搜索”。
 - 搜索页左侧为 `WKWebView`，右侧为搜索源、专辑信息和封面预览。
+- 专辑详情与封面搜索在同一个工作流容器内切换，不再嵌套系统 `.sheet`；详情容器为 `680 × 520`，搜索容器为 `1100 × 700`，仅详情目的地启用外层封面 drop zone。
 - 本地或远程图片拖入后自动回详情页，但仍需用户显式保存。
+- 每次拖图暂存都有单专辑 generation；异步结果返回时必须同时匹配当前 generation、当前音乐库和仍存在的专辑。过期结果需清理，不能覆盖较新的拖图或取消操作。
 - 保存前检查专辑目录仍存在。NAS 断开或目录消失时提示“未找到专辑”，保留暂存图片。
+- 安全书签解析、目录存在检查、图片写入和预览刷新均离开主 actor；保存成功后只发布一次目标专辑更新。写入失败或保存期间收到新拖图时，必须保留当前有效的待保存图片。
 
 ### Ollama 名称增强
 
@@ -122,8 +134,20 @@ Scripts                       验证和名称清洗审计脚本
 - 默认目录为 `~/Library/Application Support/CoverDrop/ScanDatabases`。
 - 新快照是 SQLite；稳定文件名由音乐库路径和目录角色生成，重复扫描替换该库当前快照。
 - `StreamingScanSnapshotStoring` 按专辑数报告流式加载进度。
+- 保存单张封面后优先经 `AlbumCoverSnapshotUpdating` 增量更新对应 SQLite 专辑行；增量能力不可用或失败时才回退全量快照替换。
+- 同一音乐库的快照写入由 `ScanSnapshotUpdateQueue` 串行执行并按 FIFO 保留全部更新，不能用“只保留最后一次”丢掉中间专辑变更。
+- SQLite 增量更新必须校验快照中的音乐库 UUID，不能只凭文件路径修改可能已被替换的快照。
 - 非 SQLite 文件回退到旧 `FileScanSnapshotStore` JSON 读取，以兼容历史数据。
+- 旧 JSON 快照的读取和解码也必须离开主 actor，加载完成后再回主 actor 发布状态。
 - `ScanSnapshot.currentSchemaVersion` 当前为 `2`。改 schema 必须提供迁移或兼容方案及回归测试。
+
+### 性能基线与诊断
+
+- 2026-07-14 已针对大专辑墙滚动、详情进出、聚合搜索、拖图暂存和封面保存完成定向性能重构。后续修改必须保持：滚动热路径不出现名称清洗或同步文件 I/O，非网络 UI 阶段不制造超过 `50 ms` 的主线程停顿。
+- `AppModel` 仍是 `@MainActor`，但默认 actor isolation 不代表基础设施工作可以留在主线程；文件系统、书签、图片编解码、网络数据处理和 SQLite 操作必须通过明确的非隔离边界执行。
+- 设置 `COVERDROP_DEBUG_LOG=1` 可启用结构化性能 span 和主线程停顿监测；默认关闭，不能为了诊断在封面墙热路径加入无条件 `print`。
+- 出现“专辑越多越卡”时，先检查 `AlbumCoverWallSnapshot` 是否被无意义重建、网格等价键是否失效、卡片是否重新访问完整 `AlbumScanRecord`，再用采样确认，不要直接把界面改回同步派生。
+- 详情或搜索转场回归时，先检查是否重新引入嵌套系统 Sheet/AppKit bridge；只有定向优化经真实采样仍无法达标时，才评估 `NSCollectionView` 等更大范围重写。
 
 ## 扫描边界规则
 
@@ -171,6 +195,7 @@ zsh Scripts/audit_album_name_cleaning.sh '<扫描快照.db>'
 - 选中筛选项为蓝色胶囊白字；按钮命中区域贴合视觉尺寸。蓝色只用于选中和状态提示，阴影以深灰为主。
 - 搜索默认收起；切换筛选项时收起但不清空查询。有查询时放大镜保留轻微蓝色提示。
 - 筛选切换按标签顺序左右滑动；详情进出使用轻微缩放/淡入淡出；卡片 hover 只做小幅缩放和阴影。
+- 详情与封面搜索使用内联目的地切换，不要重新套用嵌套 `.sheet`；搜索态的外层区域不能抢占网页向详情拖入封面的 drop 事件。
 - 固定格式控件需有稳定尺寸，任何桌面窗口尺寸下文字、按钮和封面卡不得重叠或因动态内容跳动。
 
 ## 测试策略
@@ -184,6 +209,9 @@ zsh Scripts/audit_album_name_cleaning.sh '<扫描快照.db>'
 - 快照：`SQLiteScanSnapshotStoreTests.swift` 和 `FileScanSnapshotStoreTests.swift`
 - 封面图片链路：`ImageIOCoverDetectorTests.swift`、`ImageIOCoverImageWriterTests.swift` 及各缓存/拖拽单测。
 - 封面墙布局：`FixedCoverGridLayoutTests.swift`。
+- 封面墙快照与内联工作流：`AlbumCoverWallSnapshotTests.swift`。
+- 本地/远程图片调度：`CoverThumbnailLoaderTests.swift`、`RemoteCoverPreviewLoaderTests.swift`、`RemoteCoverImageDataCacheTests.swift`。
+- 性能日志与快照写队列：`CoverDropPerformanceLogTests.swift`、`ScanSnapshotUpdateQueueTests.swift`。
 
 高价值性能回归用例包括：
 
@@ -191,6 +219,9 @@ zsh Scripts/audit_album_name_cleaning.sh '<扫描快照.db>'
 - `FileSystemLibraryScannerTests.imageFileCoverSkipsEmbeddedArtworkMetadataRead`
 - `AppModelImportTests.realtimeRefreshRescansChangedAlbumsConcurrently`
 - `AppModelImportTests.savingCoverInsideAppDoesNotTriggerRealtimeRefresh`
+- `AlbumCoverWallSnapshotTests.snapshotsWithSameRevisionAreNotEqual`
+- `CoverDropReceiverTests.receiverCallsAcceptedAfterImageDataIsStaged`
+- `ScanSnapshotUpdateQueueTests.sameLibraryPreservesEveryPendingUpdate`
 
 交付检查：
 
@@ -208,4 +239,4 @@ zsh Scripts/verify.sh
 - 涉及扫描、名称、快照或封面写入的行为变化，应先补回归测试再改实现。
 - 用户确认代码达到要求后，更新本文件，使下一次 AI 接手时看到的是当前事实。
 
-推荐后续方向：继续用真实目录样本提高扫描准确率；稳定名称清洗和手动 Ollama 工作流；建设“需确认”工作台；为 SQLite schema 增加明确迁移策略与确认结果持久化。
+推荐后续方向：继续用真实目录样本提高扫描准确率；稳定名称清洗和手动 Ollama 工作流；建设“需确认”工作台；为 SQLite schema 增加明确迁移策略与确认结果持久化。性能相关改动应以 2026-07-14 基线为下限，先用结构化日志和主线程采样证明瓶颈，再决定是否扩大重构范围。

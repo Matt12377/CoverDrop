@@ -35,4 +35,39 @@ struct CoverImageStagingCacheTests {
 
         #expect(request.value(forHTTPHeaderField: "Referer") == "https://music.douban.com/")
     }
+
+    @Test("预取与暂存路径复用同一远程图片数据")
+    func cachedRemoteImageDataReusesPrefetchedData() async throws {
+        let url = try #require(URL(string: "https://example.com/prefetched-cover-\(UUID().uuidString).jpg"))
+        let loader = RemoteImageDataLoaderCounter()
+
+        let prefetched = try await CoverImageStagingCache.cachedRemoteImageData(for: url) {
+            await loader.load(Data([1, 2, 3]))
+        }
+        let staged = try await CoverImageStagingCache.cachedRemoteImageData(for: url) {
+            await loader.load(Data([4, 5, 6]))
+        }
+
+        #expect(prefetched == Data([1, 2, 3]))
+        #expect(staged == Data([1, 2, 3]))
+        #expect(await loader.count == 1)
+    }
+
+    @Test("图片校验和落盘工作离开主线程")
+    func stagingWorkRunsOffMainThread() async throws {
+        let wasMainThread = try await CoverImageStagingCache.runStagingWorkOffMainActor {
+            Thread.isMainThread
+        }
+
+        #expect(wasMainThread == false)
+    }
+}
+
+private actor RemoteImageDataLoaderCounter {
+    private(set) var count = 0
+
+    func load(_ data: Data) -> Data {
+        count += 1
+        return data
+    }
 }

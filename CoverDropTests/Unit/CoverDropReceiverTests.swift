@@ -54,7 +54,22 @@ struct CoverDropReceiverTests {
         }
 
         let appModel = AppModel()
-        let albumID = "album-\(UUID().uuidString)"
+        let libraryID = UUID()
+        let album = AlbumScanRecord(
+            folderURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("CoverDropReceiver-\(UUID().uuidString)", isDirectory: true),
+            artistName: "测试歌手",
+            albumName: "测试专辑",
+            audioFiles: [],
+            displayedCover: nil,
+            issues: []
+        )
+        appModel.selectedLibraryID = libraryID
+        _ = await appModel.setScanResult(
+            LibraryScanResult(albums: [album], looseAudioPaths: []),
+            for: libraryID
+        )
+        let albumID = album.id
         var didAccept = false
 
         let didReceive = CoverDropReceiver.receive(

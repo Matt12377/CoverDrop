@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 @testable import CoverDrop
 
@@ -56,6 +57,33 @@ struct SQLiteScanSnapshotStoreTests {
         }
     }
 
+    @Test("旧音乐库的全量替换不会覆盖同路径的新音乐库快照")
+    func staleReplacementDoesNotOverwriteNewLibrarySnapshot() async throws {
+        try await withTemporaryDirectory { root in
+            let store = SQLiteScanSnapshotStore(directoryURL: root)
+            let oldLibrary = makeLibrary(rootPath: "/Volumes/Music", role: .library)
+            let newLibrary = makeLibrary(rootPath: "/Volumes/Music", role: .library)
+            let oldSnapshot = makeSnapshot(library: oldLibrary, albumCount: 1)
+            let oldSummary = try await store.saveNewSnapshot(oldSnapshot)
+            let newSummary = try await store.saveNewSnapshot(makeSnapshot(
+                library: newLibrary,
+                albumCount: 3
+            ))
+
+            #expect(oldSummary.fileURL == newSummary.fileURL)
+            await #expect(throws: SQLiteScanSnapshotStoreError.self) {
+                try await store.replaceSnapshot(oldSnapshot, at: oldSummary.fileURL)
+            }
+
+            let loaded = try await store.loadSnapshot(
+                at: newSummary.fileURL,
+                expectedLibrary: newLibrary
+            )
+            #expect(loaded.library.id == newLibrary.id)
+            #expect(loaded.scanResult.albums.count == 3)
+        }
+    }
+
     @Test("SQLite 流式加载按批上报专辑进度")
     func streamingLoadReportsAlbumProgress() async throws {
         try await withTemporaryDirectory { root in
@@ -93,6 +121,15 @@ struct SQLiteScanSnapshotStoreTests {
             #expect(latest?.fileURL == legacySummary.fileURL)
             #expect(loaded.scanResult.albums.count == 1)
         }
+    }
+
+    @Test("旧 JSON 快照读取和解码离开主线程")
+    func legacyJSONWorkRunsOffMainThread() async throws {
+        let wasMainThread = try await SQLiteScanSnapshotStore.runLegacyJSONWorkOffMainActor {
+            Thread.isMainThread
+        }
+
+        #expect(!wasMainThread)
     }
 
     @Test("SQLite store 兼容读取没有 CUE 字段的 v1 JSON 快照")
@@ -147,6 +184,64 @@ struct SQLiteScanSnapshotStoreTests {
                 try await store.loadSnapshot(
                     at: summary.fileURL,
                     expectedLibrary: makeLibrary(rootPath: "/Volumes/B", role: .library)
+                )
+            }
+        }
+    }
+
+    @Test("更新单张专辑封面时不重写音频行")
+    func incrementalCoverUpdatePreservesAudioRows() async throws {
+        try await withTemporaryDirectory { root in
+            let store = SQLiteScanSnapshotStore(directoryURL: root)
+            let library = makeLibrary(rootPath: "/Volumes/Music", role: .library)
+            let snapshot = makeSnapshot(library: library, albumCount: 2)
+            let summary = try await store.saveNewSnapshot(snapshot)
+            let album = try #require(snapshot.scanResult.albums.first)
+            let rowIDsBefore = try audioFileRowIDs(at: summary.fileURL)
+            let updatedCover = ScanSnapshot.Cover(
+                path: "\(album.folderPath)/cover-new.jpg",
+                previewPath: "\(album.folderPath)/cover-new-preview.jpg",
+                relativePath: "cover-new.jpg",
+                namePriority: 0,
+                depth: 0,
+                source: .file
+            )
+
+            let updatedSummary = try await store.updateAlbumCover(
+                updatedCover,
+                forAlbumID: album.folderPath,
+                at: summary.fileURL,
+                expectedLibrary: library
+            )
+            let loaded = try await store.loadSnapshot(
+                at: updatedSummary.fileURL,
+                expectedLibrary: library
+            )
+            let updatedAlbum = try #require(loaded.scanResult.albums.first)
+
+            #expect(try audioFileRowIDs(at: summary.fileURL) == rowIDsBefore)
+            #expect(updatedSummary.albumCount == 2)
+            #expect(updatedAlbum.displayedCover == updatedCover)
+        }
+    }
+
+    @Test("增量封面更新拒绝同路径但身份不同的音乐库")
+    func incrementalCoverUpdateRejectsDifferentLibraryIdentity() async throws {
+        try await withTemporaryDirectory { root in
+            let store = SQLiteScanSnapshotStore(directoryURL: root)
+            let originalLibrary = makeLibrary(rootPath: "/Volumes/Music", role: .library)
+            let replacementLibrary = makeLibrary(rootPath: "/Volumes/Music", role: .library)
+            let snapshot = makeSnapshot(library: originalLibrary, albumCount: 1)
+            let summary = try await store.saveNewSnapshot(snapshot)
+            let album = try #require(snapshot.scanResult.albums.first)
+
+            #expect(originalLibrary.id != replacementLibrary.id)
+            await #expect(throws: SQLiteScanSnapshotStoreError.self) {
+                try await store.updateAlbumCover(
+                    nil,
+                    forAlbumID: album.folderPath,
+                    at: summary.fileURL,
+                    expectedLibrary: replacementLibrary
                 )
             }
         }
@@ -235,6 +330,36 @@ struct SQLiteScanSnapshotStoreTests {
             bookmarkData: Data(rootPath.utf8),
             role: role
         )
+    }
+
+    private func audioFileRowIDs(at fileURL: URL) throws -> [Int64] {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(fileURL.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+              let db else {
+            sqlite3_close(db)
+            throw SQLiteScanSnapshotStoreError.openFailed("测试无法打开数据库")
+        }
+        defer { sqlite3_close(db) }
+
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            db,
+            "SELECT rowid FROM audio_files ORDER BY album_id, ordinal",
+            -1,
+            &statement,
+            nil
+        ) == SQLITE_OK,
+        let statement else {
+            sqlite3_finalize(statement)
+            throw SQLiteScanSnapshotStoreError.queryFailed("测试无法读取音频行")
+        }
+        defer { sqlite3_finalize(statement) }
+
+        var rowIDs: [Int64] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            rowIDs.append(sqlite3_column_int64(statement, 0))
+        }
+        return rowIDs
     }
 
     private func withTemporaryDirectory(

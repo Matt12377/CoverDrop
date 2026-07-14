@@ -1,9 +1,10 @@
 import Foundation
 import SQLite3
 
-final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Sendable {
+nonisolated final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, AlbumCoverSnapshotUpdating, @unchecked Sendable {
     private let directoryURL: URL
     private let fileManager: FileManager
+    private let writeCoordinator = SQLiteSnapshotWriteCoordinator()
 
     init(
         directoryURL: URL,
@@ -14,21 +15,44 @@ final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Se
     }
 
     func saveNewSnapshot(_ snapshot: ScanSnapshot) async throws -> ScanSnapshotSummary {
-        try createDirectoryIfNeeded()
-        let fileURL = stableDatabaseFileURL(for: snapshot.library)
-        try write(snapshot, to: fileURL)
-        return summary(for: snapshot, fileURL: fileURL)
+        try await writeCoordinator.run { [self] in
+            try createDirectoryIfNeeded()
+            let fileURL = stableDatabaseFileURL(for: snapshot.library)
+            try write(snapshot, to: fileURL)
+            return summary(for: snapshot, fileURL: fileURL)
+        }
     }
 
     func replaceSnapshot(_ snapshot: ScanSnapshot, at fileURL: URL) async throws -> ScanSnapshotSummary {
-        try createDirectoryIfNeeded()
-        guard fileURL.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL == directoryURL.resolvingSymlinksInPath().standardizedFileURL else {
-            throw SQLiteScanSnapshotStoreError.outsideSnapshotDirectory(fileURL.path)
-        }
+        try await writeCoordinator.run { [self] in
+            try createDirectoryIfNeeded()
+            try validateSnapshotFileURL(fileURL)
 
-        let stableFileURL = stableDatabaseFileURL(for: snapshot.library)
-        try write(snapshot, to: stableFileURL)
-        return summary(for: snapshot, fileURL: stableFileURL)
+            let stableFileURL = stableDatabaseFileURL(for: snapshot.library)
+            try validateExistingSnapshotIdentity(
+                at: stableFileURL,
+                expectedLibraryID: snapshot.library.id
+            )
+            try write(snapshot, to: stableFileURL)
+            return summary(for: snapshot, fileURL: stableFileURL)
+        }
+    }
+
+    func updateAlbumCover(
+        _ cover: ScanSnapshot.Cover?,
+        forAlbumID albumID: AlbumScanRecord.ID,
+        at fileURL: URL,
+        expectedLibrary: LibraryRecord
+    ) async throws -> ScanSnapshotSummary {
+        try await writeCoordinator.run { [self] in
+            try validateSnapshotFileURL(fileURL)
+            return try updateAlbumCoverSynchronously(
+                cover,
+                forAlbumID: albumID,
+                at: fileURL,
+                expectedLibrary: expectedLibrary
+            )
+        }
     }
 
     func latestSnapshot(for library: LibraryRecord) async throws -> ScanSnapshotSummary? {
@@ -40,7 +64,7 @@ final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Se
         do {
             return try sqliteSummary(at: fileURL, expectedLibrary: library)
         } catch SQLiteScanSnapshotStoreError.notSQLiteSnapshot {
-            return try legacyJSONSummary(at: fileURL, expectedLibrary: library)
+            return try await legacyJSONSummary(at: fileURL, expectedLibrary: library)
         }
     }
 
@@ -52,7 +76,7 @@ final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Se
                 progress: nil
             )
         } catch SQLiteScanSnapshotStoreError.notSQLiteSnapshot {
-            return try legacyJSONSnapshot(at: fileURL, expectedLibrary: expectedLibrary)
+            return try await legacyJSONSnapshot(at: fileURL, expectedLibrary: expectedLibrary)
         }
     }
 
@@ -68,7 +92,7 @@ final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Se
                 progress: progress
             )
         } catch SQLiteScanSnapshotStoreError.notSQLiteSnapshot {
-            let snapshot = try legacyJSONSnapshot(at: fileURL, expectedLibrary: expectedLibrary)
+            let snapshot = try await legacyJSONSnapshot(at: fileURL, expectedLibrary: expectedLibrary)
             await progress(
                 ScanSnapshotLoadProgress(
                     phase: .converting,
@@ -85,6 +109,13 @@ final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Se
             at: directoryURL,
             withIntermediateDirectories: true
         )
+    }
+
+    private func validateSnapshotFileURL(_ fileURL: URL) throws {
+        guard fileURL.deletingLastPathComponent().resolvingSymlinksInPath().standardizedFileURL
+            == directoryURL.resolvingSymlinksInPath().standardizedFileURL else {
+            throw SQLiteScanSnapshotStoreError.outsideSnapshotDirectory(fileURL.path)
+        }
     }
 
     private func stableDatabaseFileURL(for library: LibraryRecord) -> URL {
@@ -109,6 +140,42 @@ final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Se
         )
     }
 
+    private func validateExistingSnapshotIdentity(
+        at fileURL: URL,
+        expectedLibraryID: UUID
+    ) throws {
+        guard fileManager.fileExists(atPath: fileURL.path) else { return }
+
+        let actualLibraryID: UUID
+        do {
+            let db = try openExistingSQLite(at: fileURL)
+            defer { sqlite3_close(db) }
+            actualLibraryID = try storedLibraryID(db: db)
+        } catch SQLiteScanSnapshotStoreError.notSQLiteSnapshot {
+            let data = try Data(contentsOf: fileURL)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            actualLibraryID = try decoder.decode(ScanSnapshot.self, from: data).library.id
+        }
+
+        guard actualLibraryID == expectedLibraryID else {
+            throw SQLiteScanSnapshotStoreError.libraryIDMismatch(
+                expected: expectedLibraryID,
+                actual: actualLibraryID
+            )
+        }
+    }
+
+    private func storedLibraryID(db: OpaquePointer) throws -> UUID {
+        try withStatement(db, "SELECT library_id FROM snapshots WHERE id = 1") { statement in
+            guard sqlite3_step(statement) == SQLITE_ROW,
+                  let libraryID = UUID(uuidString: columnText(statement, 0) ?? "") else {
+                throw SQLiteScanSnapshotStoreError.invalidHeader
+            }
+            return libraryID
+        }
+    }
+
     private func write(_ snapshot: ScanSnapshot, to fileURL: URL) throws {
         var db: OpaquePointer?
         if sqlite3_open(fileURL.path, &db) != SQLITE_OK {
@@ -129,6 +196,69 @@ final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Se
             try? execute(db, "ROLLBACK")
             throw error
         }
+    }
+
+    private func updateAlbumCoverSynchronously(
+        _ cover: ScanSnapshot.Cover?,
+        forAlbumID albumID: AlbumScanRecord.ID,
+        at fileURL: URL,
+        expectedLibrary: LibraryRecord
+    ) throws -> ScanSnapshotSummary {
+        var database: OpaquePointer?
+        guard sqlite3_open_v2(
+            fileURL.path,
+            &database,
+            SQLITE_OPEN_READWRITE,
+            nil
+        ) == SQLITE_OK,
+        let database else {
+            let message = sqliteError(database)
+            sqlite3_close(database)
+            throw SQLiteScanSnapshotStoreError.openFailed(message)
+        }
+        defer { sqlite3_close(database) }
+
+        try execute(database, "PRAGMA foreign_keys = ON")
+        let header = try loadHeader(db: database, expectedLibrary: expectedLibrary)
+        try execute(database, "BEGIN IMMEDIATE TRANSACTION")
+        do {
+            try withStatement(
+                database,
+                """
+                UPDATE albums SET
+                    cover_path = ?, cover_preview_path = ?, cover_relative_path = ?,
+                    cover_name_priority = ?, cover_depth = ?, cover_source = ?
+                WHERE id = ?
+                """
+            ) { statement in
+                bindTextOrNull(cover?.path, to: statement, at: 1)
+                bindTextOrNull(cover?.previewPath, to: statement, at: 2)
+                bindTextOrNull(cover?.relativePath, to: statement, at: 3)
+                bindIntOrNull(cover?.namePriority, to: statement, at: 4)
+                bindIntOrNull(cover?.depth, to: statement, at: 5)
+                bindTextOrNull(cover?.source.rawValue, to: statement, at: 6)
+                bindText(albumID, to: statement, at: 7)
+                try stepDone(statement, db: database)
+            }
+            guard sqlite3_changes(database) == 1 else {
+                throw SQLiteScanSnapshotStoreError.albumNotFound(albumID)
+            }
+            try execute(database, "COMMIT")
+        } catch {
+            try? execute(database, "ROLLBACK")
+            throw error
+        }
+
+        CoverDropDebugLog.write("扫描快照：已增量更新专辑封面，albumID=\(albumID)")
+        return ScanSnapshotSummary(
+            fileURL: fileURL.resolvingSymlinksInPath(),
+            schemaVersion: header.schemaVersion,
+            createdAt: header.createdAt,
+            libraryDisplayName: header.library.displayName,
+            libraryRootPath: header.library.rootPath,
+            libraryRole: header.library.role,
+            albumCount: try albumCount(db: database)
+        )
     }
 
     private func createSchema(in db: OpaquePointer) throws {
@@ -506,6 +636,13 @@ final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Se
                 throw SQLiteScanSnapshotStoreError.invalidHeader
             }
 
+            guard libraryID == expectedLibrary.id else {
+                throw SQLiteScanSnapshotStoreError.libraryIDMismatch(
+                    expected: expectedLibrary.id,
+                    actual: libraryID
+                )
+            }
+
             let libraryRootPath = columnText(statement, 4) ?? ""
             let expectedRootPath = FileScanSnapshotStore.normalizedPath(expectedLibrary.rootPath)
             guard FileScanSnapshotStore.normalizedPath(libraryRootPath) == expectedRootPath else {
@@ -699,20 +836,38 @@ final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Se
         )
     }
 
-    private func legacyJSONSummary(at fileURL: URL, expectedLibrary: LibraryRecord) throws -> ScanSnapshotSummary? {
+    private func legacyJSONSummary(
+        at fileURL: URL,
+        expectedLibrary: LibraryRecord
+    ) async throws -> ScanSnapshotSummary? {
         guard fileManager.fileExists(atPath: fileURL.path) else { return nil }
-        let snapshot = try legacyJSONSnapshot(at: fileURL, expectedLibrary: expectedLibrary)
+        let snapshot = try await legacyJSONSnapshot(
+            at: fileURL,
+            expectedLibrary: expectedLibrary
+        )
         return summary(for: snapshot, fileURL: fileURL)
     }
 
-    private func legacyJSONSnapshot(at fileURL: URL, expectedLibrary: LibraryRecord) throws -> ScanSnapshot {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let snapshot = try decoder.decode(ScanSnapshot.self, from: Data(contentsOf: fileURL))
+    private func legacyJSONSnapshot(
+        at fileURL: URL,
+        expectedLibrary: LibraryRecord
+    ) async throws -> ScanSnapshot {
+        let snapshot = try await Self.runLegacyJSONWorkOffMainActor {
+            let data = try Data(contentsOf: fileURL)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(ScanSnapshot.self, from: data)
+        }
         guard FileScanSnapshotStore.isSupportedSchemaVersion(snapshot.schemaVersion) else {
             throw SQLiteScanSnapshotStoreError.unsupportedSchemaVersion(
                 actual: snapshot.schemaVersion,
                 supported: ScanSnapshot.currentSchemaVersion
+            )
+        }
+        guard snapshot.library.id == expectedLibrary.id else {
+            throw SQLiteScanSnapshotStoreError.libraryIDMismatch(
+                expected: expectedLibrary.id,
+                actual: snapshot.library.id
             )
         }
         let expectedRootPath = FileScanSnapshotStore.normalizedPath(expectedLibrary.rootPath)
@@ -729,6 +884,14 @@ final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Se
             )
         }
         return snapshot
+    }
+
+    nonisolated static func runLegacyJSONWorkOffMainActor<T: Sendable>(
+        _ work: @escaping @Sendable () throws -> T
+    ) async throws -> T {
+        try await Task.detached(priority: .userInitiated) {
+            try work()
+        }.value
     }
 
     private func summary(for snapshot: ScanSnapshot, fileURL: URL) -> ScanSnapshotSummary {
@@ -862,7 +1025,10 @@ final class SQLiteScanSnapshotStore: StreamingScanSnapshotStoring, @unchecked Se
 
 }
 
-private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+nonisolated(unsafe) private let SQLITE_TRANSIENT = unsafeBitCast(
+    -1,
+    to: sqlite3_destructor_type.self
+)
 
 enum SQLiteScanSnapshotStoreError: LocalizedError, Sendable {
     case notSQLiteSnapshot
@@ -870,11 +1036,13 @@ enum SQLiteScanSnapshotStoreError: LocalizedError, Sendable {
     case queryFailed(String)
     case outsideSnapshotDirectory(String)
     case unsupportedSchemaVersion(actual: Int, supported: Int)
+    case libraryIDMismatch(expected: UUID, actual: UUID)
     case libraryRootMismatch(expected: String, actual: String)
     case libraryRoleMismatch(expected: String, actual: String)
     case invalidDate(String)
     case invalidHeader
     case invalidIssueKind(String)
+    case albumNotFound(String)
 
     var errorDescription: String? {
         switch self {
@@ -888,6 +1056,8 @@ enum SQLiteScanSnapshotStoreError: LocalizedError, Sendable {
             "扫描快照路径不在允许目录内：\(path)"
         case .unsupportedSchemaVersion(let actual, let supported):
             "扫描快照版本不兼容：\(actual)，当前支持：\(supported)"
+        case .libraryIDMismatch(let expected, let actual):
+            "扫描快照音乐库身份不匹配，期望 \(expected.uuidString)，实际 \(actual.uuidString)"
         case .libraryRootMismatch(let expected, let actual):
             "扫描快照目录不匹配，期望 \(expected)，实际 \(actual)"
         case .libraryRoleMismatch(let expected, let actual):
@@ -898,6 +1068,16 @@ enum SQLiteScanSnapshotStoreError: LocalizedError, Sendable {
             "扫描快照头信息无效。"
         case .invalidIssueKind(let kind):
             "扫描快照异常类型无效：\(kind)"
+        case .albumNotFound(let albumID):
+            "SQLite 扫描快照中未找到专辑：\(albumID)"
         }
+    }
+}
+
+private actor SQLiteSnapshotWriteCoordinator {
+    func run<T: Sendable>(
+        _ operation: @escaping @Sendable () throws -> T
+    ) rethrows -> T {
+        try operation()
     }
 }

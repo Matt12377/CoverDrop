@@ -12,6 +12,7 @@ struct AppEnvironment: Sendable {
     let libraryScanner: any LibraryScanning
     let libraryChangeMonitor: any LibraryChangeMonitoring
     let coverImageWriter: any CoverImageWriting
+    let coverImageStager: any CoverImageStaging
     let coverDetector: any CoverDetecting
     let albumNameSuggesting: any AlbumNameSuggesting
     let scanSnapshotStore: any ScanSnapshotStoring
@@ -27,6 +28,7 @@ struct AppEnvironment: Sendable {
         libraryScanner: any LibraryScanning,
         libraryChangeMonitor: any LibraryChangeMonitoring = DisabledLibraryChangeMonitor(),
         coverImageWriter: any CoverImageWriting,
+        coverImageStager: any CoverImageStaging = LiveCoverImageStager(),
         coverDetector: any CoverDetecting = ImageIOCoverDetector(),
         albumNameSuggesting: any AlbumNameSuggesting = DisabledAlbumNameSuggesting(),
         scanSnapshotStore: any ScanSnapshotStoring = DisabledScanSnapshotStore(),
@@ -41,6 +43,7 @@ struct AppEnvironment: Sendable {
         self.libraryScanner = libraryScanner
         self.libraryChangeMonitor = libraryChangeMonitor
         self.coverImageWriter = coverImageWriter
+        self.coverImageStager = coverImageStager
         self.coverDetector = coverDetector
         self.albumNameSuggesting = albumNameSuggesting
         self.scanSnapshotStore = scanSnapshotStore

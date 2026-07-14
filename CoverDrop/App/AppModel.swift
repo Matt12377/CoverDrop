@@ -46,6 +46,23 @@ final class AppModel: ObservableObject {
         let albumNameEnhancementStatus: AlbumNameEnhancementStatus?
     }
 
+    nonisolated private enum OffMainCoverWriteResult: Sendable {
+        case missingAlbumFolder
+        case written(URL)
+    }
+
+    nonisolated private enum CoverWriteAccessPreparation: Sendable {
+        case missingAlbumFolder
+        case ready(CoverWriteSecurityScope)
+    }
+
+    nonisolated private struct CoverWriteSecurityScope: Sendable {
+        let sourceURL: URL
+        let libraryURL: URL
+        let didStartSourceAccessing: Bool
+        let didStartLibraryAccessing: Bool
+    }
+
     private enum AlbumNameEnhancementQueueSource: Sendable {
         case albumManual
         case libraryManual
@@ -101,13 +118,19 @@ final class AppModel: ObservableObject {
     let environment: AppEnvironment
     @Published private(set) var route: Route = .libraries
     @Published private(set) var libraries: [LibraryRecord] = []
-    @Published var selectedLibraryID: LibraryRecord.ID?
+    @Published var selectedLibraryID: LibraryRecord.ID? {
+        didSet {
+            guard oldValue != selectedLibraryID, let oldValue else { return }
+            invalidateCoverStagingRequests(for: oldValue)
+        }
+    }
     @Published var pendingImport: PendingLibraryImport?
     @Published private(set) var isLoadingLibraries = false
     @Published private(set) var scanningLibraryID: LibraryRecord.ID?
     @Published private(set) var scanProgress: LibraryScanProgress?
     @Published private(set) var scanResultsByLibraryID: [LibraryRecord.ID: LibraryScanResult] = [:]
     private var scanDisplayIndexesByLibraryID: [LibraryRecord.ID: AlbumScanDisplayIndex] = [:]
+    private var scanResultMutationGenerationByLibraryID: [LibraryRecord.ID: UInt64] = [:]
     @Published var errorMessage: String?
     @Published private(set) var albumNameEnhancementStatusByLibraryID: [LibraryRecord.ID: AlbumNameEnhancementStatus] = [:]
     @Published private(set) var albumNameEnhancementProgressByLibraryID: [LibraryRecord.ID: AlbumNameEnhancementProgress] = [:]
@@ -120,6 +143,7 @@ final class AppModel: ObservableObject {
     private var activeAlbumNameEnhancementBatchIDs: [LibraryRecord.ID: UUID] = [:]
     private var albumNameEnhancementSnapshotUpdateLibraryIDs: Set<LibraryRecord.ID> = []
     @Published private(set) var pendingCoverURLsByAlbumID: [AlbumScanRecord.ID: URL] = [:]
+    private var coverStagingGenerationByAlbumID: [AlbumScanRecord.ID: UInt64] = [:]
     @Published private(set) var coverWriteMessagesByAlbumID: [AlbumScanRecord.ID: String] = [:]
     @Published private(set) var savingCoverAlbumIDs: Set<AlbumScanRecord.ID> = []
     @Published private(set) var albumFolderOpenMessagesByAlbumID: [AlbumScanRecord.ID: String] = [:]
@@ -139,6 +163,7 @@ final class AppModel: ObservableObject {
     private var pendingRefreshLibraryIDs: Set<LibraryRecord.ID> = []
     private var pendingRealtimeRefreshScopesByLibraryID: [LibraryRecord.ID: RealtimeRefreshScope] = [:]
     private var ignoredInternalRealtimeChangePathsByLibraryID: [LibraryRecord.ID: [String: Date]] = [:]
+    private let scanSnapshotUpdateQueue = ScanSnapshotUpdateQueue()
     private let taskLock = NSLock()
 
     init(environment: AppEnvironment = .live) {
@@ -316,7 +341,7 @@ final class AppModel: ObservableObject {
         scanningLibraryID = library.id
         scanProgress = nil
         stopLibraryChangeMonitoring(for: library.id)
-        cancelAlbumNameEnhancement(for: library.id)
+        cancelAlbumNameEnhancement(for: library.id, clearsSuggestions: false)
         defer {
             if scanningLibraryID == library.id {
                 scanningLibraryID = nil
@@ -346,7 +371,10 @@ final class AppModel: ObservableObject {
                     }
                 }
             }.value
-            setScanResult(result, for: library.id)
+            cancelAlbumNameEnhancement(for: library.id)
+            guard await setScanResult(result, for: library.id) else {
+                return
+            }
             await saveNewScanSnapshot(for: library, result: result)
             startLibraryChangeMonitoring(for: library)
             if selectedLibraryID == library.id {
@@ -376,6 +404,22 @@ final class AppModel: ObservableObject {
             filter: filter,
             query: query
         ) ?? []
+    }
+
+    func coverWallSnapshotInSelectedLibrary(
+        filter: AlbumScanResultFilter,
+        query: String
+    ) -> AlbumCoverWallSnapshot {
+        guard let selectedLibraryID,
+              let index = scanDisplayIndexesByLibraryID[selectedLibraryID] else {
+            return AlbumCoverWallSnapshot(
+                revision: 0,
+                filter: filter,
+                normalizedQuery: query,
+                cards: []
+            )
+        }
+        return index.coverWallSnapshot(filter: filter, query: query)
     }
 
     func filteredLooseAudioPathsInSelectedLibrary(
@@ -579,7 +623,6 @@ final class AppModel: ObservableObject {
             isRunning: false,
             lastErrorMessage: nil
         )
-        rebuildScanDisplayIndex(for: libraryID)
     }
 
     func latestScanSnapshot(for libraryID: LibraryRecord.ID) -> ScanSnapshotSummary? {
@@ -606,29 +649,27 @@ final class AppModel: ObservableObject {
         realtimeRefreshMessagesByLibraryID[libraryID]
     }
 
-    func reportSelectedAlbumDisappeared(albumID: AlbumScanRecord.ID) {
-        clearTransientState(forAlbumID: albumID, inLibraryID: selectedLibraryID)
-        guard let selectedLibraryID else { return }
-        realtimeRefreshMessagesByLibraryID[selectedLibraryID] = "专辑目录已移除或边界已变化"
-    }
-
     @discardableResult
-    func removeAlbumIfFolderMissing(albumID: AlbumScanRecord.ID) -> Bool {
+    func removeAlbumIfFolderMissing(albumID: AlbumScanRecord.ID) async -> Bool {
         guard let selectedLibraryID,
-              let result = scanResultsByLibraryID[selectedLibraryID],
-              let album = result.albums.first(where: { $0.id == albumID }) else {
+              let album = albumInSelectedLibrary(id: albumID) else {
             return false
         }
 
-        guard !Self.albumFolderExists(album.folderURL) else {
+        guard !(await Self.albumFolderExistsOffMainActor(album.folderURL)),
+              self.selectedLibraryID == selectedLibraryID,
+              let result = scanResultsByLibraryID[selectedLibraryID],
+              albumInSelectedLibrary(id: albumID)?.folderURL == album.folderURL else {
             return false
         }
 
         let albums = result.albums.filter { $0.id != albumID }
-        setScanResult(LibraryScanResult(
+        guard await setScanResult(LibraryScanResult(
             albums: albums,
             looseAudioPaths: result.looseAudioPaths
-        ), for: selectedLibraryID)
+        ), for: selectedLibraryID) else {
+            return false
+        }
         clearTransientState(forAlbumID: albumID, inLibraryID: selectedLibraryID)
         realtimeRefreshMessagesByLibraryID[selectedLibraryID] = "专辑目录已移除"
         scheduleActiveScanSnapshotUpdate(for: selectedLibraryID)
@@ -680,11 +721,12 @@ final class AppModel: ObservableObject {
                 }
             }.value
             cancelAlbumNameEnhancement(for: library.id)
-            setScanResult(loadedSnapshot.result, for: library.id)
             albumNameSuggestionsByLibraryID[library.id] = loadedSnapshot.albumNameSuggestions
-            rebuildScanDisplayIndex(for: library.id)
             if let status = loadedSnapshot.albumNameEnhancementStatus {
                 albumNameEnhancementStatusByLibraryID[library.id] = status
+            }
+            guard await setScanResult(loadedSnapshot.result, for: library.id) else {
+                return
             }
             activeScanSnapshotsByLibraryID[library.id] = summary
             scanSnapshotMessagesByLibraryID[library.id] = "已加载快照结果：\(summary.fileURL.lastPathComponent)"
@@ -794,6 +836,14 @@ final class AppModel: ObservableObject {
     ) -> (artistName: String, albumName: String) {
         let resolvedLibraryID = libraryID ?? selectedLibraryID
         if let resolvedLibraryID,
+           let presentation = scanDisplayIndexesByLibraryID[resolvedLibraryID]?.presentation(id: album.id) {
+            return (
+                artistName: presentation.displayArtistName,
+                albumName: presentation.displayAlbumName
+            )
+        }
+
+        if let resolvedLibraryID,
            let suggestion = albumNameSuggestionsByLibraryID[resolvedLibraryID]?[album.id] {
             return AlbumDisplayNameCleaning.displayNames(
                 for: album,
@@ -817,9 +867,96 @@ final class AppModel: ObservableObject {
         )
     }
 
-    private func setScanResult(_ result: LibraryScanResult, for libraryID: LibraryRecord.ID) {
+    nonisolated private static func makeCoverCardPresentation(
+        for album: AlbumScanRecord,
+        suggestion: AlbumNameSuggestion?,
+        enhancementErrorMessage: String?,
+        contentRevision: UInt64
+    ) -> AlbumCoverCardPresentation {
+        let names = AlbumDisplayNameCleaning.displayNames(
+            for: album,
+            artistName: suggestion?.artistName ?? album.artistName,
+            albumName: suggestion?.albumName ?? album.albumName
+        )
+        let issueHelp = album.issues.map(\.displayName).joined(separator: "\n")
+        return AlbumCoverCardPresentation(
+            id: album.id,
+            folderURL: album.folderURL,
+            displayArtistName: names.artistName,
+            displayAlbumName: names.albumName,
+            formatTags: Array(Set(album.audioFiles.map { $0.format.uppercased() }))
+                .sorted()
+                .prefix(2)
+                .map { $0 },
+            coverURL: album.displayedCover?.displayURL,
+            contentRevision: contentRevision,
+            coverSourceName: album.displayedCover?.source.displayName,
+            needsAttention: album.needsAttention,
+            issueHelp: issueHelp.isEmpty ? nil : issueHelp,
+            canSplitWithXLD: AlbumScanDisplayIndex.canSplitSingleFileCue(album),
+            hasEnhancedName: suggestion != nil,
+            enhancementErrorMessage: enhancementErrorMessage
+        )
+    }
+
+    private func makeCoverCardPresentationBuilder(
+        for libraryID: LibraryRecord.ID
+    ) -> @Sendable (AlbumScanRecord, UInt64) -> AlbumCoverCardPresentation {
+        let suggestions = albumNameSuggestionsByLibraryID[libraryID] ?? [:]
+        let errorMessages = albumNameEnhancementStateByAlbumID.compactMapValues(\.lastErrorMessage)
+        return { album, contentRevision in
+            Self.makeCoverCardPresentation(
+                for: album,
+                suggestion: suggestions[album.id],
+                enhancementErrorMessage: errorMessages[album.id],
+                contentRevision: contentRevision
+            )
+        }
+    }
+
+    private func failedAlbumIDs(in result: LibraryScanResult) -> Set<AlbumScanRecord.ID> {
+        let albumIDs = Set(result.albums.map(\.id))
+        return Set(albumNameEnhancementStateByAlbumID.compactMap { albumID, state in
+            albumIDs.contains(albumID) && state.lastErrorMessage != nil ? albumID : nil
+        })
+    }
+
+    @discardableResult
+    func setScanResult(
+        _ result: LibraryScanResult,
+        for libraryID: LibraryRecord.ID
+    ) async -> Bool {
+        let mutationGeneration = beginScanResultMutation(for: libraryID)
+        let failedAlbumIDs = failedAlbumIDs(in: result)
+        let makePresentation = makeCoverCardPresentationBuilder(for: libraryID)
+        let displayIndex = await Self.buildScanDisplayIndexOffMainActor(
+            result: result,
+            failedAlbumIDs: failedAlbumIDs,
+            makePresentation: makePresentation
+        )
+        guard scanResultMutationGenerationByLibraryID[libraryID] == mutationGeneration else {
+            CoverDropDebugLog.write(
+                "扫描展示索引：丢弃已过期的后台构建，libraryID=\(libraryID)，专辑数=\(result.albums.count)"
+            )
+            return false
+        }
         scanResultsByLibraryID[libraryID] = result
-        rebuildScanDisplayIndex(for: libraryID)
+        scanDisplayIndexesByLibraryID[libraryID] = displayIndex
+        return true
+    }
+
+    nonisolated static func buildScanDisplayIndexOffMainActor(
+        result: LibraryScanResult,
+        failedAlbumIDs: Set<AlbumScanRecord.ID>,
+        makePresentation: @escaping @Sendable (AlbumScanRecord, UInt64) -> AlbumCoverCardPresentation
+    ) async -> AlbumScanDisplayIndex {
+        await Task.detached(priority: .userInitiated) {
+            AlbumScanDisplayIndex(
+                result: result,
+                failedAlbumIDs: failedAlbumIDs,
+                makePresentation: makePresentation
+            )
+        }.value
     }
 
     private func setScanResult(
@@ -827,45 +964,39 @@ final class AppModel: ObservableObject {
         replacingAlbums refreshedAlbums: [AlbumScanRecord],
         for libraryID: LibraryRecord.ID
     ) {
+        beginScanResultMutation(for: libraryID)
         scanResultsByLibraryID[libraryID] = result
         if let index = scanDisplayIndexesByLibraryID[libraryID] {
             scanDisplayIndexesByLibraryID[libraryID] = index.replacingAlbums(
                 refreshedAlbums,
-                displayNames: { [weak self] album in
-                    guard let self else {
-                        return (artistName: album.artistName, albumName: album.albumName)
-                    }
-                    return self.displayNames(for: album, in: libraryID)
-                }
+                makePresentation: makeCoverCardPresentationBuilder(for: libraryID)
             )
         } else {
-            rebuildScanDisplayIndex(for: libraryID)
+            rebuildScanDisplayIndex(for: libraryID, invalidatesPendingBuild: false)
         }
     }
 
     private func clearScanResult(for libraryID: LibraryRecord.ID) {
+        beginScanResultMutation(for: libraryID)
         scanResultsByLibraryID[libraryID] = nil
         scanDisplayIndexesByLibraryID[libraryID] = nil
     }
 
-    private func rebuildScanDisplayIndex(for libraryID: LibraryRecord.ID) {
+    private func rebuildScanDisplayIndex(
+        for libraryID: LibraryRecord.ID,
+        invalidatesPendingBuild: Bool = true
+    ) {
+        if invalidatesPendingBuild {
+            beginScanResultMutation(for: libraryID)
+        }
         guard let result = scanResultsByLibraryID[libraryID] else {
             scanDisplayIndexesByLibraryID[libraryID] = nil
             return
         }
-        let albumIDs = Set(result.albums.map(\.id))
-        let failedAlbumIDs = Set(albumNameEnhancementStateByAlbumID.compactMap { albumID, state in
-            albumIDs.contains(albumID) && state.lastErrorMessage != nil ? albumID : nil
-        })
         scanDisplayIndexesByLibraryID[libraryID] = AlbumScanDisplayIndex(
             result: result,
-            failedAlbumIDs: failedAlbumIDs,
-            displayNames: { [weak self] album in
-                guard let self else {
-                    return (artistName: album.artistName, albumName: album.albumName)
-                }
-                return self.displayNames(for: album, in: libraryID)
-            }
+            failedAlbumIDs: failedAlbumIDs(in: result),
+            makePresentation: makeCoverCardPresentationBuilder(for: libraryID)
         )
     }
 
@@ -873,9 +1004,10 @@ final class AppModel: ObservableObject {
         albumID: AlbumScanRecord.ID,
         libraryID: LibraryRecord.ID
     ) {
+        beginScanResultMutation(for: libraryID)
         guard let index = scanDisplayIndexesByLibraryID[libraryID],
               index.album(id: albumID) != nil else {
-            rebuildScanDisplayIndex(for: libraryID)
+            rebuildScanDisplayIndex(for: libraryID, invalidatesPendingBuild: false)
             return
         }
 
@@ -889,13 +1021,42 @@ final class AppModel: ObservableObject {
         scanDisplayIndexesByLibraryID[libraryID] = index.updatingNameEnhancement(
             for: albumID,
             failedAlbumIDs: failedAlbumIDs,
-            displayNames: { [weak self] album in
-                guard let self else {
-                    return (artistName: album.artistName, albumName: album.albumName)
-                }
-                return self.displayNames(for: album, in: libraryID)
-            }
+            makePresentation: makeCoverCardPresentationBuilder(for: libraryID)
         )
+    }
+
+    @discardableResult
+    private func beginScanResultMutation(for libraryID: LibraryRecord.ID) -> UInt64 {
+        let nextGeneration = (scanResultMutationGenerationByLibraryID[libraryID] ?? 0) &+ 1
+        scanResultMutationGenerationByLibraryID[libraryID] = nextGeneration
+        return nextGeneration
+    }
+
+    @discardableResult
+    private func beginCoverStagingRequest(for albumID: AlbumScanRecord.ID) -> UInt64 {
+        let nextGeneration = (coverStagingGenerationByAlbumID[albumID] ?? 0) &+ 1
+        coverStagingGenerationByAlbumID[albumID] = nextGeneration
+        return nextGeneration
+    }
+
+    private func isCurrentCoverStagingRequest(
+        generation: UInt64,
+        albumID: AlbumScanRecord.ID,
+        libraryID: LibraryRecord.ID?
+    ) -> Bool {
+        guard let libraryID,
+              selectedLibraryID == libraryID,
+              coverStagingGenerationByAlbumID[albumID] == generation else {
+            return false
+        }
+        return scanDisplayIndexesByLibraryID[libraryID]?.album(id: albumID) != nil
+    }
+
+    private func invalidateCoverStagingRequests(for libraryID: LibraryRecord.ID) {
+        guard let result = scanResultsByLibraryID[libraryID] else { return }
+        for album in result.albums {
+            beginCoverStagingRequest(for: album.id)
+        }
     }
 
     func pendingCoverURL(for albumID: AlbumScanRecord.ID) -> URL? {
@@ -903,7 +1064,13 @@ final class AppModel: ObservableObject {
     }
 
     func stageCoverImage(_ sourceURL: URL, forAlbumID albumID: AlbumScanRecord.ID) {
+        beginCoverStagingRequest(for: albumID)
         pendingCoverURLsByAlbumID[albumID] = sourceURL
+    }
+
+    func stageCoverImageIfProvided(_ sourceURL: URL?, forAlbumID albumID: AlbumScanRecord.ID) {
+        guard let sourceURL else { return }
+        stageCoverImage(sourceURL, forAlbumID: albumID)
     }
 
     @discardableResult
@@ -912,39 +1079,114 @@ final class AppModel: ObservableObject {
         suggestedExtension: String?,
         forAlbumID albumID: AlbumScanRecord.ID
     ) async -> Bool {
+        let libraryID = selectedLibraryID
+        let stagingGeneration = beginCoverStagingRequest(for: albumID)
+        let performanceSpan = CoverDropPerformanceLog.begin(
+            CoverDropPerformanceOperation.stageCoverImage,
+            context: [
+                "albumID": albumID,
+                "bytes": "\(data.count)",
+                "kind": "data"
+            ]
+        )
         do {
-            let stagedURL = try await Self.stageCoverImageDataOffMainActor(
+            let stagedURL = try await environment.coverImageStager.stageImageData(
                 data,
                 suggestedExtension: suggestedExtension
             )
+            guard isCurrentCoverStagingRequest(
+                generation: stagingGeneration,
+                albumID: albumID,
+                libraryID: libraryID
+            ) else {
+                await Self.removeDiscardedStagedCover(at: stagedURL)
+                performanceSpan?.finish(
+                    outcome: .cancelled,
+                    context: ["reason": "stale_request"]
+                )
+                return false
+            }
             pendingCoverURLsByAlbumID[albumID] = stagedURL
+            performanceSpan?.finish()
             return true
         } catch {
+            guard isCurrentCoverStagingRequest(
+                generation: stagingGeneration,
+                albumID: albumID,
+                libraryID: libraryID
+            ) else {
+                performanceSpan?.finish(
+                    outcome: .cancelled,
+                    context: ["reason": "stale_request"]
+                )
+                return false
+            }
             errorMessage = "无法暂存拖入的图片：\(error.localizedDescription)"
+            performanceSpan?.finish(
+                outcome: .failure,
+                context: ["error": error.localizedDescription]
+            )
             return false
         }
     }
 
     @discardableResult
     func stageDroppedCoverURL(_ url: URL, forAlbumID albumID: AlbumScanRecord.ID) async -> Bool {
+        let performanceSpan = CoverDropPerformanceLog.begin(
+            CoverDropPerformanceOperation.stageCoverImage,
+            context: [
+                "albumID": albumID,
+                "kind": url.isFileURL ? "file" : "remote"
+            ]
+        )
         if url.isFileURL {
             CoverDropDebugLog.write("封面暂存：收到本地文件 URL：\(url.path)")
             stageCoverImage(url, forAlbumID: albumID)
+            performanceSpan?.finish()
             return true
         }
 
         CoverDropDebugLog.write("封面暂存：收到远程 URL：\(url.absoluteString)")
-        return await stageRemoteCoverImage(at: url, forAlbumID: albumID)
+        let didStage = await stageRemoteCoverImage(at: url, forAlbumID: albumID)
+        performanceSpan?.finish(
+            outcome: didStage ? .success : .failure
+        )
+        return didStage
+    }
+
+    func prefetchRemoteCoverImage(at remoteURL: URL) {
+        guard ["http", "https"].contains(remoteURL.scheme?.lowercased()) else { return }
+
+        Task { [coverImageStager = environment.coverImageStager] in
+            await coverImageStager.prefetchRemoteImage(at: remoteURL)
+        }
     }
 
     @discardableResult
     func stageRemoteCoverImage(at remoteURL: URL, forAlbumID albumID: AlbumScanRecord.ID) async -> Bool {
+        let libraryID = selectedLibraryID
+        let stagingGeneration = beginCoverStagingRequest(for: albumID)
         do {
-            let stagedURL = try await CoverImageStagingCache.stageRemoteImage(at: remoteURL)
+            let stagedURL = try await environment.coverImageStager.stageRemoteImage(at: remoteURL)
+            guard isCurrentCoverStagingRequest(
+                generation: stagingGeneration,
+                albumID: albumID,
+                libraryID: libraryID
+            ) else {
+                await Self.removeDiscardedStagedCover(at: stagedURL)
+                return false
+            }
             pendingCoverURLsByAlbumID[albumID] = stagedURL
             CoverDropDebugLog.write("封面暂存：远程图片已暂存到：\(stagedURL.path)")
             return true
         } catch {
+            guard isCurrentCoverStagingRequest(
+                generation: stagingGeneration,
+                albumID: albumID,
+                libraryID: libraryID
+            ) else {
+                return false
+            }
             CoverDropDebugLog.write("封面暂存：远程图片暂存失败，URL=\(remoteURL.absoluteString)，原因=\(error.localizedDescription)")
             errorMessage = "无法暂存网页图片：\(error.localizedDescription)"
             return false
@@ -952,6 +1194,8 @@ final class AppModel: ObservableObject {
     }
 
     func cancelPendingCoverImage(forAlbumID albumID: AlbumScanRecord.ID) {
+        beginCoverStagingRequest(for: albumID)
+        guard pendingCoverURLsByAlbumID[albumID] != nil else { return }
         pendingCoverURLsByAlbumID[albumID] = nil
     }
 
@@ -963,15 +1207,23 @@ final class AppModel: ObservableObject {
         guard let sourceURL = pendingCoverURLsByAlbumID[albumID] else {
             return false
         }
+        let stagingGeneration = coverStagingGenerationByAlbumID[albumID]
+        let performanceSpan = CoverDropPerformanceLog.begin(
+            CoverDropPerformanceOperation.saveCoverImage,
+            context: ["albumID": albumID, "phase": "workflow"]
+        )
         savingCoverAlbumIDs.insert(albumID)
         defer {
             savingCoverAlbumIDs.remove(albumID)
         }
 
         let didWrite = await writeCoverImage(from: sourceURL, forAlbumID: albumID)
-        if didWrite {
+        if didWrite,
+           coverStagingGenerationByAlbumID[albumID] == stagingGeneration,
+           pendingCoverURLsByAlbumID[albumID] == sourceURL {
             pendingCoverURLsByAlbumID[albumID] = nil
         }
+        performanceSpan?.finish(outcome: didWrite ? .success : .failure)
         return didWrite
     }
 
@@ -986,54 +1238,38 @@ final class AppModel: ObservableObject {
         let libraryID = library.id
         markInternalCoverWrite(forAlbumFolder: album.folderURL, libraryID: libraryID)
 
-        let didStartSourceAccessing = sourceURL.startAccessingSecurityScopedResource()
-        defer {
-            if didStartSourceAccessing {
-                sourceURL.stopAccessingSecurityScopedResource()
-            }
-        }
-
         do {
-            let libraryURL = try environment.folderAccess.resolveBookmark(library.bookmarkData)
-            let didStartLibraryAccessing = libraryURL.startAccessingSecurityScopedResource()
-            defer {
-                if didStartLibraryAccessing {
-                    libraryURL.stopAccessingSecurityScopedResource()
-                }
-            }
-
-            guard Self.albumFolderExists(album.folderURL) else {
-                errorMessage = "未找到专辑：\(displayAlbumName(for: album))"
-                return false
-            }
-
             CoverDropDebugLog.write(
                 "保存封面：开始写入 cover.jpg，albumID=\(albumID)，source=\(sourceURL.path)，albumFolder=\(album.folderURL.path)"
             )
-            let coverURL = try await environment.coverImageWriter.writeCoverImage(
-                from: sourceURL,
-                toAlbumFolder: album.folderURL
+            let writeResult = try await Self.writeCoverImageOffMainActor(
+                sourceURL: sourceURL,
+                albumFolderURL: album.folderURL,
+                libraryBookmarkData: library.bookmarkData,
+                folderAccess: environment.folderAccess,
+                coverImageWriter: environment.coverImageWriter
             )
+            guard case .written(let coverURL) = writeResult else {
+                errorMessage = "未找到专辑：\(displayAlbumName(for: album))"
+                return false
+            }
             CoverDropDebugLog.write(
                 "保存封面：写入 cover.jpg 成功，albumID=\(albumID)，coverURL=\(coverURL.path)"
             )
 
-            CoverPreviewCache.invalidateImageCache(for: coverURL)
+            let previewURL = await Task.detached(priority: .userInitiated) {
+                CoverPreviewCache.refreshedPreviewURLForUpdatedCover(coverURL)
+            }.value
 
             replaceAlbumCover(
                 albumID: albumID,
                 inLibraryID: libraryID,
                 with: coverURL,
-                previewURL: nil
+                previewURL: previewURL
             )
 
             coverWriteMessagesByAlbumID = [albumID: "已保存封面：\(displayAlbumName(for: album))"]
-            refreshCoverPreviewInBackground(
-                for: coverURL,
-                albumID: albumID,
-                libraryID: libraryID
-            )
-            scheduleActiveScanSnapshotUpdate(for: libraryID)
+            scheduleActiveScanCoverUpdate(for: albumID, libraryID: libraryID)
             return true
         } catch {
             CoverDropDebugLog.write(
@@ -1044,12 +1280,139 @@ final class AppModel: ObservableObject {
         }
     }
 
+    nonisolated private static func writeCoverImageOffMainActor(
+        sourceURL: URL,
+        albumFolderURL: URL,
+        libraryBookmarkData: Data,
+        folderAccess: any FolderAccessing,
+        coverImageWriter: any CoverImageWriting
+    ) async throws -> OffMainCoverWriteResult {
+        let preparation = try await prepareCoverWriteAccess(
+            sourceURL: sourceURL,
+            albumFolderURL: albumFolderURL,
+            libraryBookmarkData: libraryBookmarkData,
+            folderAccess: folderAccess
+        )
+        guard case .ready(let securityScope) = preparation else {
+            return .missingAlbumFolder
+        }
+
+        do {
+            let coverURL = try await Task.detached(priority: .userInitiated) {
+                try await coverImageWriter.writeCoverImage(
+                    from: sourceURL,
+                    toAlbumFolder: albumFolderURL
+                )
+            }.value
+            await releaseCoverWriteAccess(securityScope)
+            return .written(coverURL)
+        } catch {
+            await releaseCoverWriteAccess(securityScope)
+            throw error
+        }
+    }
+
+    nonisolated private static func prepareCoverWriteAccess(
+        sourceURL: URL,
+        albumFolderURL: URL,
+        libraryBookmarkData: Data,
+        folderAccess: any FolderAccessing
+    ) async throws -> CoverWriteAccessPreparation {
+        try await runCoverWritePreparationOffMainActor {
+            let didStartSourceAccessing = sourceURL.startAccessingSecurityScopedResource()
+            do {
+                let libraryURL = try folderAccess.resolveBookmark(libraryBookmarkData)
+                let didStartLibraryAccessing = libraryURL.startAccessingSecurityScopedResource()
+                let performanceSpan = CoverDropPerformanceLog.begin(
+                    CoverDropPerformanceOperation.checkAlbumFolder,
+                    context: ["path": albumFolderURL.path]
+                )
+                guard albumFolderExists(albumFolderURL) else {
+                    performanceSpan?.finish(context: ["exists": "false"])
+                    if didStartLibraryAccessing {
+                        libraryURL.stopAccessingSecurityScopedResource()
+                    }
+                    if didStartSourceAccessing {
+                        sourceURL.stopAccessingSecurityScopedResource()
+                    }
+                    return .missingAlbumFolder
+                }
+                performanceSpan?.finish(context: ["exists": "true"])
+                return .ready(CoverWriteSecurityScope(
+                    sourceURL: sourceURL,
+                    libraryURL: libraryURL,
+                    didStartSourceAccessing: didStartSourceAccessing,
+                    didStartLibraryAccessing: didStartLibraryAccessing
+                ))
+            } catch {
+                if didStartSourceAccessing {
+                    sourceURL.stopAccessingSecurityScopedResource()
+                }
+                throw error
+            }
+        }
+    }
+
+    nonisolated static func runCoverWritePreparationOffMainActor<T: Sendable>(
+        _ work: @escaping @Sendable () throws -> T
+    ) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(with: Result {
+                    try work()
+                })
+            }
+        }
+    }
+
+    nonisolated private static func releaseCoverWriteAccess(
+        _ securityScope: CoverWriteSecurityScope
+    ) async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                if securityScope.didStartLibraryAccessing {
+                    securityScope.libraryURL.stopAccessingSecurityScopedResource()
+                }
+                if securityScope.didStartSourceAccessing {
+                    securityScope.sourceURL.stopAccessingSecurityScopedResource()
+                }
+                continuation.resume()
+            }
+        }
+    }
+
     nonisolated private static func albumFolderExists(_ folderURL: URL) -> Bool {
         var isDirectory: ObjCBool = false
         return FileManager.default.fileExists(
             atPath: folderURL.path,
             isDirectory: &isDirectory
         ) && isDirectory.boolValue
+    }
+
+    nonisolated static func albumFolderExistsOffMainActor(_ folderURL: URL) async -> Bool {
+        let performanceSpan = CoverDropPerformanceLog.begin(
+            CoverDropPerformanceOperation.checkAlbumFolder,
+            context: ["path": folderURL.path]
+        )
+        let exists = await runAlbumFolderCheckOffMainActor {
+            albumFolderExists(folderURL)
+        }
+        performanceSpan?.finish(context: ["exists": exists ? "true" : "false"])
+        return exists
+    }
+
+    nonisolated private static func removeDiscardedStagedCover(at stagedURL: URL) async {
+        await Task.detached(priority: .utility) {
+            try? FileManager.default.removeItem(at: stagedURL)
+        }.value
+    }
+
+    nonisolated static func runAlbumFolderCheckOffMainActor<T: Sendable>(
+        _ check: @escaping @Sendable () -> T
+    ) async -> T {
+        await Task.detached(priority: .userInitiated) {
+            check()
+        }.value
     }
 
     nonisolated private static func regularFileExists(_ fileURL: URL) -> Bool {
@@ -1072,7 +1435,7 @@ final class AppModel: ObservableObject {
             return
         }
 
-        let folderExists = Self.albumFolderExists(album.folderURL)
+        let folderExists = await Self.albumFolderExistsOffMainActor(album.folderURL)
         FinderAlbumFolderOpenDiagnostics.log(
             "appModel.resolved albumID=\(albumID) libraryID=\(selectedLibraryID) folder=\(album.folderURL.path) folderExists=\(folderExists)"
         )
@@ -1145,27 +1508,23 @@ final class AppModel: ObservableObject {
         await writeCoverImage(from: sourceURL, forAlbumID: album.id)
     }
 
-    nonisolated private static func stageCoverImageDataOffMainActor(
-        _ data: Data,
-        suggestedExtension: String?
-    ) async throws -> URL {
-        try await Task.detached(priority: .userInitiated) {
-            try CoverImageStagingCache.stageImageData(
-                data,
-                suggestedExtension: suggestedExtension
-            )
-        }.value
-    }
-
     private func replaceAlbumCover(
         albumID: AlbumScanRecord.ID,
         inLibraryID libraryID: LibraryRecord.ID,
         with coverURL: URL,
         previewURL: URL?
     ) {
+        let performanceSpan = CoverDropPerformanceLog.begin(
+            CoverDropPerformanceOperation.updateAlbumCover,
+            context: ["albumID": albumID]
+        )
         guard let result = scanResultsByLibraryID[libraryID],
               let index = result.albums.firstIndex(where: { $0.id == albumID }) else {
             CoverDropDebugLog.write("封面保存：无法找到专辑，albumID=\(albumID)")
+            performanceSpan?.finish(
+                outcome: .failure,
+                context: ["error": "album_not_found"]
+            )
             return
         }
         CoverDropDebugLog.write("封面保存：找到专辑 index=\(index)，coverURL=\(coverURL.path)，lastPathComponent=\(coverURL.lastPathComponent)")
@@ -1192,12 +1551,14 @@ final class AppModel: ObservableObject {
             albums: albums,
             looseAudioPaths: result.looseAudioPaths
         ), replacingAlbums: [updatedAlbum], for: libraryID)
+        performanceSpan?.finish(context: ["albumCount": "\(albums.count)"])
     }
 
     private func clearTransientState(
         forAlbumID albumID: AlbumScanRecord.ID,
         inLibraryID libraryID: LibraryRecord.ID?
     ) {
+        beginCoverStagingRequest(for: albumID)
         pendingCoverURLsByAlbumID[albumID] = nil
         coverWriteMessagesByAlbumID[albumID] = nil
         savingCoverAlbumIDs.remove(albumID)
@@ -1214,32 +1575,10 @@ final class AppModel: ObservableObject {
                 albumNameSuggestionsByLibraryID[libraryID] = nil
             }
             refreshAlbumNameEnhancementStatus(for: libraryID)
-            rebuildScanDisplayIndex(for: libraryID)
-        }
-    }
-
-    private func refreshCoverPreviewInBackground(
-        for coverURL: URL,
-        albumID: AlbumScanRecord.ID,
-        libraryID: LibraryRecord.ID
-    ) {
-        Task.detached { [weak self] in
-            let previewURL = CoverPreviewCache.refreshedPreviewURLForUpdatedCover(coverURL)
-            guard let previewURL else { return }
-
-            await MainActor.run { [weak self] in
-                guard let self,
-                      let result = scanResultsByLibraryID[libraryID],
-                      result.albums.contains(where: {
-                          $0.id == albumID && $0.displayedCover?.url == coverURL
-                      }) else {
-                    return
-                }
-                replaceAlbumCover(
+            if scanDisplayIndexesByLibraryID[libraryID]?.album(id: albumID) != nil {
+                updateScanDisplayIndexForNameEnhancement(
                     albumID: albumID,
-                    inLibraryID: libraryID,
-                    with: coverURL,
-                    previewURL: previewURL
+                    libraryID: libraryID
                 )
             }
         }
@@ -1518,12 +1857,12 @@ final class AppModel: ObservableObject {
             albumNameSuggestionsByLibraryID[libraryID] = nil
             albumNameEnhancementProgressByLibraryID[libraryID] = nil
         }
-        rebuildScanDisplayIndex(for: libraryID)
     }
 
     private func clearLibraryState(for libraryID: LibraryRecord.ID) {
         stopLibraryChangeMonitoring(for: libraryID)
         cancelAlbumNameEnhancement(for: libraryID)
+        invalidateCoverStagingRequests(for: libraryID)
         clearScanResult(for: libraryID)
         latestScanSnapshotsByLibraryID[libraryID] = nil
         activeScanSnapshotsByLibraryID[libraryID] = nil
@@ -2149,39 +2488,6 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func updateActiveScanSnapshot(for libraryID: LibraryRecord.ID) async {
-        guard let library = libraries.first(where: { $0.id == libraryID }),
-              let result = scanResultsByLibraryID[libraryID] else {
-            return
-        }
-
-        do {
-            let snapshot = makeScanSnapshot(
-                for: library,
-                result: result,
-                createdAt: activeScanSnapshotsByLibraryID[library.id]?.createdAt ?? .now
-            )
-            let summary: ScanSnapshotSummary
-            if let activeSummary = activeScanSnapshotsByLibraryID[libraryID] {
-                summary = try await environment.scanSnapshotStore.replaceSnapshot(
-                    snapshot,
-                    at: activeSummary.fileURL
-                )
-            } else {
-                summary = try await environment.scanSnapshotStore.saveNewSnapshot(snapshot)
-            }
-
-            latestScanSnapshotsByLibraryID[libraryID] = summary
-            activeScanSnapshotsByLibraryID[libraryID] = summary
-            scanSnapshotMessagesByLibraryID[libraryID] = "已更新扫描快照：\(summary.fileURL.lastPathComponent)"
-        } catch {
-            CoverDropDebugLog.write(
-                "扫描快照：更新失败，libraryID=\(libraryID)，原因=\(error.localizedDescription)"
-            )
-            scanSnapshotMessagesByLibraryID[libraryID] = "更新扫描快照失败：\(error.localizedDescription)"
-        }
-    }
-
     private func scheduleActiveScanSnapshotUpdate(for libraryID: LibraryRecord.ID) {
         guard let library = libraries.first(where: { $0.id == libraryID }),
               let result = scanResultsByLibraryID[libraryID] else {
@@ -2193,45 +2499,165 @@ final class AppModel: ObservableObject {
         let suggestions = albumNameSuggestionsByLibraryID[libraryID] ?? [:]
         let status = albumNameEnhancementStatusByLibraryID[libraryID]
         let snapshotStore = environment.scanSnapshotStore
+        let updateQueue = scanSnapshotUpdateQueue
 
-        Task.detached { [weak self, snapshotStore] in
-            let snapshot = Self.makeScanSnapshot(
-                for: library,
-                result: result,
-                createdAt: createdAt,
-                albumNameSuggestions: suggestions,
-                albumNameEnhancementStatus: status
-            )
-
-            do {
-                let summary: ScanSnapshotSummary
-                if let activeSummary {
-                    summary = try await snapshotStore.replaceSnapshot(
-                        snapshot,
-                        at: activeSummary.fileURL
+        Task { [weak self] in
+            await updateQueue.submit(libraryID: libraryID) { [weak self, snapshotStore] in
+                do {
+                    let summary = try await Self.persistFullScanSnapshot(
+                        library: library,
+                        result: result,
+                        createdAt: createdAt,
+                        activeSummary: activeSummary,
+                        suggestions: suggestions,
+                        status: status,
+                        snapshotStore: snapshotStore
                     )
-                } else {
-                    summary = try await snapshotStore.saveNewSnapshot(snapshot)
-                }
-
-                await MainActor.run { [weak self] in
-                    guard let self,
-                          libraries.contains(where: { $0.id == libraryID }) else {
-                        return
-                    }
-                    latestScanSnapshotsByLibraryID[libraryID] = summary
-                    activeScanSnapshotsByLibraryID[libraryID] = summary
-                    scanSnapshotMessagesByLibraryID[libraryID] = "已更新扫描快照：\(summary.fileURL.lastPathComponent)"
-                }
-            } catch {
-                CoverDropDebugLog.write(
-                    "扫描快照：后台更新失败，libraryID=\(libraryID)，原因=\(error.localizedDescription)"
-                )
-                await MainActor.run { [weak self] in
-                    self?.scanSnapshotMessagesByLibraryID[libraryID] = "更新扫描快照失败：\(error.localizedDescription)"
+                    await self?.publishScanSnapshotUpdate(summary, for: libraryID)
+                } catch {
+                    await self?.publishScanSnapshotUpdateFailure(error, for: libraryID)
                 }
             }
         }
+    }
+
+    private func scheduleActiveScanCoverUpdate(
+        for albumID: AlbumScanRecord.ID,
+        libraryID: LibraryRecord.ID
+    ) {
+        guard let library = libraries.first(where: { $0.id == libraryID }),
+              let result = scanResultsByLibraryID[libraryID],
+              let album = result.albums.first(where: { $0.id == albumID }) else {
+            return
+        }
+
+        let createdAt = activeScanSnapshotsByLibraryID[libraryID]?.createdAt ?? .now
+        let activeSummary = activeScanSnapshotsByLibraryID[libraryID]
+        let suggestions = albumNameSuggestionsByLibraryID[libraryID] ?? [:]
+        let status = albumNameEnhancementStatusByLibraryID[libraryID]
+        let snapshotStore = environment.scanSnapshotStore
+        let updateQueue = scanSnapshotUpdateQueue
+        let cover = album.displayedCover.map(ScanSnapshot.Cover.init(cover:))
+
+        Task { [weak self] in
+            await updateQueue.submit(libraryID: libraryID) { [weak self, snapshotStore] in
+                do {
+                    let summary: ScanSnapshotSummary
+                    if let activeSummary,
+                       let coverSnapshotStore = snapshotStore as? any AlbumCoverSnapshotUpdating {
+                        let performanceSpan = CoverDropPerformanceLog.begin(
+                            CoverDropPerformanceOperation.updateScanSnapshot,
+                            context: [
+                                "albumID": albumID,
+                                "libraryID": libraryID.uuidString,
+                                "mode": "incremental"
+                            ]
+                        )
+                        do {
+                            summary = try await coverSnapshotStore.updateAlbumCover(
+                                cover,
+                                forAlbumID: albumID,
+                                at: activeSummary.fileURL,
+                                expectedLibrary: library
+                            )
+                            performanceSpan?.finish()
+                        } catch {
+                            performanceSpan?.finish(
+                                outcome: .failure,
+                                context: ["error": error.localizedDescription]
+                            )
+                            CoverDropDebugLog.write(
+                                "扫描快照：封面增量更新失败，回退全量更新，albumID=\(albumID)，原因=\(error.localizedDescription)"
+                            )
+                            summary = try await Self.persistFullScanSnapshot(
+                                library: library,
+                                result: result,
+                                createdAt: createdAt,
+                                activeSummary: activeSummary,
+                                suggestions: suggestions,
+                                status: status,
+                                snapshotStore: snapshotStore
+                            )
+                        }
+                    } else {
+                        summary = try await Self.persistFullScanSnapshot(
+                            library: library,
+                            result: result,
+                            createdAt: createdAt,
+                            activeSummary: activeSummary,
+                            suggestions: suggestions,
+                            status: status,
+                            snapshotStore: snapshotStore
+                        )
+                    }
+                    await self?.publishScanSnapshotUpdate(summary, for: libraryID)
+                } catch {
+                    await self?.publishScanSnapshotUpdateFailure(error, for: libraryID)
+                }
+            }
+        }
+    }
+
+    private nonisolated static func persistFullScanSnapshot(
+        library: LibraryRecord,
+        result: LibraryScanResult,
+        createdAt: Date,
+        activeSummary: ScanSnapshotSummary?,
+        suggestions: [AlbumScanRecord.ID: AlbumNameSuggestion],
+        status: AlbumNameEnhancementStatus?,
+        snapshotStore: any ScanSnapshotStoring
+    ) async throws -> ScanSnapshotSummary {
+        let performanceSpan = CoverDropPerformanceLog.begin(
+            CoverDropPerformanceOperation.updateScanSnapshot,
+            context: [
+                "albumCount": "\(result.albums.count)",
+                "libraryID": library.id.uuidString,
+                "mode": "full"
+            ]
+        )
+        let snapshot = makeScanSnapshot(
+            for: library,
+            result: result,
+            createdAt: createdAt,
+            albumNameSuggestions: suggestions,
+            albumNameEnhancementStatus: status
+        )
+        do {
+            let summary: ScanSnapshotSummary
+            if let activeSummary {
+                summary = try await snapshotStore.replaceSnapshot(snapshot, at: activeSummary.fileURL)
+            } else {
+                summary = try await snapshotStore.saveNewSnapshot(snapshot)
+            }
+            performanceSpan?.finish()
+            return summary
+        } catch {
+            performanceSpan?.finish(
+                outcome: .failure,
+                context: ["error": error.localizedDescription]
+            )
+            throw error
+        }
+    }
+
+    private func publishScanSnapshotUpdate(
+        _ summary: ScanSnapshotSummary,
+        for libraryID: LibraryRecord.ID
+    ) {
+        guard libraries.contains(where: { $0.id == libraryID }) else { return }
+        latestScanSnapshotsByLibraryID[libraryID] = summary
+        activeScanSnapshotsByLibraryID[libraryID] = summary
+        scanSnapshotMessagesByLibraryID[libraryID] = "已更新扫描快照：\(summary.fileURL.lastPathComponent)"
+    }
+
+    private func publishScanSnapshotUpdateFailure(
+        _ error: any Error,
+        for libraryID: LibraryRecord.ID
+    ) {
+        CoverDropDebugLog.write(
+            "扫描快照：后台更新失败，libraryID=\(libraryID)，原因=\(error.localizedDescription)"
+        )
+        scanSnapshotMessagesByLibraryID[libraryID] = "更新扫描快照失败：\(error.localizedDescription)"
     }
 
     private func makeScanSnapshot(

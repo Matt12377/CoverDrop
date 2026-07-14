@@ -27,4 +27,22 @@ struct CoverSearchResult: Identifiable, Equatable, Sendable {
     let thumbnailURL: URL
     let imageURL: URL
     let externalURL: URL?
+
+    nonisolated init(
+        id: String,
+        sourceName: String,
+        albumName: String,
+        artistName: String,
+        thumbnailURL: URL,
+        imageURL: URL,
+        externalURL: URL?
+    ) {
+        self.id = id
+        self.sourceName = sourceName
+        self.albumName = albumName
+        self.artistName = artistName
+        self.thumbnailURL = thumbnailURL
+        self.imageURL = imageURL
+        self.externalURL = externalURL
+    }
 }

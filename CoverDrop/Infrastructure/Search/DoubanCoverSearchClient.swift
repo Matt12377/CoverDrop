@@ -48,7 +48,7 @@ struct DoubanCoverSearchClient: CoverSearching {
             throw Failure.badHTTPStatus(httpResponse.statusCode)
         }
 
-        return try Self.decodeResults(from: data)
+        return try await Self.decodeResultsOffMainActor(from: data)
     }
 
     static func searchURL(
@@ -66,7 +66,7 @@ struct DoubanCoverSearchClient: CoverSearching {
         return components.url
     }
 
-    static func decodeResults(from data: Data) throws -> [CoverSearchResult] {
+    nonisolated static func decodeResults(from data: Data) throws -> [CoverSearchResult] {
         guard let html = String(data: data, encoding: .utf8),
               let jsonData = dataPayload(in: html) else {
             throw Failure.invalidResponse
@@ -80,7 +80,15 @@ struct DoubanCoverSearchClient: CoverSearching {
         }
     }
 
-    static func largeArtworkURL(from url: URL) -> URL {
+    nonisolated static func decodeResultsOffMainActor(
+        from data: Data
+    ) async throws -> [CoverSearchResult] {
+        try await Task.detached(priority: .userInitiated) {
+            try decodeResults(from: data)
+        }.value
+    }
+
+    nonisolated static func largeArtworkURL(from url: URL) -> URL {
         let absoluteString = url.absoluteString
         let largeString = absoluteString
             .replacingOccurrences(of: "/m/public/", with: "/l/public/")
@@ -88,7 +96,7 @@ struct DoubanCoverSearchClient: CoverSearching {
         return URL(string: largeString) ?? url
     }
 
-    private static func dataPayload(in html: String) -> Data? {
+    nonisolated private static func dataPayload(in html: String) -> Data? {
         guard let markerRange = html.range(of: "window.__DATA__"),
               let objectStart = html[markerRange.upperBound...].firstIndex(of: "{") else {
             return nil
@@ -131,11 +139,20 @@ struct DoubanCoverSearchClient: CoverSearching {
     }
 }
 
-private struct DoubanSearchResponse: Decodable {
+private struct DoubanSearchResponse: Decodable, Sendable {
     let items: [DoubanSearchItem]
+
+    private enum CodingKeys: String, CodingKey {
+        case items
+    }
+
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        items = try container.decode([DoubanSearchItem].self, forKey: .items)
+    }
 }
 
-private struct DoubanSearchItem: Decodable {
+private struct DoubanSearchItem: Decodable, Sendable {
     let id: Int?
     let title: String?
     let abstract: String?
@@ -150,7 +167,16 @@ private struct DoubanSearchItem: Decodable {
         case url
     }
 
-    var coverSearchResult: CoverSearchResult? {
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(Int.self, forKey: .id)
+        title = try container.decodeIfPresent(String.self, forKey: .title)
+        abstract = try container.decodeIfPresent(String.self, forKey: .abstract)
+        coverURL = try container.decodeIfPresent(URL.self, forKey: .coverURL)
+        url = try container.decodeIfPresent(URL.self, forKey: .url)
+    }
+
+    nonisolated var coverSearchResult: CoverSearchResult? {
         guard let id,
               let rawTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines),
               !rawTitle.isEmpty,
@@ -169,7 +195,7 @@ private struct DoubanSearchItem: Decodable {
         )
     }
 
-    private static func primarySegment(in value: String) -> String {
+    nonisolated private static func primarySegment(in value: String) -> String {
         value
             .components(separatedBy: " / ")
             .first?
@@ -177,7 +203,7 @@ private struct DoubanSearchItem: Decodable {
             .nonEmpty ?? value
     }
 
-    private static func artistName(from abstract: String?) -> String {
+    nonisolated private static func artistName(from abstract: String?) -> String {
         guard let firstSegment = abstract?
             .components(separatedBy: " / ")
             .first?
@@ -190,7 +216,7 @@ private struct DoubanSearchItem: Decodable {
 }
 
 private extension String {
-    var nonEmpty: String? {
+    nonisolated var nonEmpty: String? {
         isEmpty ? nil : self
     }
 }

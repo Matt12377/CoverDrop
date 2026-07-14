@@ -26,29 +26,25 @@ struct LibraryScanSummaryView: View {
         case backward
     }
 
-    private var filteredAlbums: [AlbumScanRecord] {
-        appModel.filteredAlbumsInSelectedLibrary(
-            filter: filter,
-            query: debouncedQuery
-        )
-    }
-
     private var filteredLooseAudioPaths: [String] {
         appModel.filteredLooseAudioPathsInSelectedLibrary(filter: filter, query: debouncedQuery)
     }
 
     var body: some View {
-        let visibleAlbums = filteredAlbums
+        let coverWallSnapshot = appModel.coverWallSnapshotInSelectedLibrary(
+            filter: filter,
+            query: debouncedQuery
+        )
         let visibleLooseAudioPaths = filteredLooseAudioPaths
 
         VStack(alignment: .leading, spacing: 0) {
             libraryOverviewHeader(
-                visibleAlbumCount: visibleAlbums.count,
+                visibleAlbumCount: coverWallSnapshot.cards.count,
                 visibleLooseAudioCount: visibleLooseAudioPaths.count
             )
 
             filteredContent(
-                visibleAlbums: visibleAlbums,
+                coverWallSnapshot: coverWallSnapshot,
                 visibleLooseAudioPaths: visibleLooseAudioPaths
             )
             .id(filter)
@@ -68,16 +64,6 @@ struct LibraryScanSummaryView: View {
                 clearSelectedAlbumDetail()
             }
         }
-        .onChange(of: result.albums.map(\.id)) { _, albumIDs in
-            guard let selectedAlbumID,
-                  !albumIDs.contains(selectedAlbumID) else {
-                return
-            }
-            appModel.reportSelectedAlbumDisappeared(albumID: selectedAlbumID)
-            if !isShowingAlbumDetail {
-                clearSelectedAlbumDetail()
-            }
-        }
         .onChange(of: query) { _, newValue in
             scheduleQueryDebounce(newValue)
         }
@@ -88,18 +74,18 @@ struct LibraryScanSummaryView: View {
 
     @ViewBuilder
     private func filteredContent(
-        visibleAlbums: [AlbumScanRecord],
+        coverWallSnapshot: AlbumCoverWallSnapshot,
         visibleLooseAudioPaths: [String]
     ) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !visibleAlbums.isEmpty {
-                albumGrid(albums: visibleAlbums)
+            if !coverWallSnapshot.cards.isEmpty {
+                albumGrid(snapshot: coverWallSnapshot)
             } else if filter != .looseAudio {
                 emptyState(emptyAlbumStateTitle, systemImage: "square.grid.2x2")
             }
 
             if !visibleLooseAudioPaths.isEmpty {
-                if !visibleAlbums.isEmpty {
+                if !coverWallSnapshot.cards.isEmpty {
                     LibraryDividerLine()
                 }
                 looseAudioList(paths: visibleLooseAudioPaths)
@@ -530,72 +516,49 @@ struct LibraryScanSummaryView: View {
         }
     }
 
-    private func albumGrid(albums: [AlbumScanRecord]) -> some View {
-        GeometryReader { proxy in
-            let contentWidth = max(
-                0,
-                proxy.size.width - 2 * FixedCoverGridLayout.horizontalContentPadding
-            )
-            let metrics = FixedCoverGridLayout.metrics(forContentWidth: contentWidth)
-
-            ScrollView {
-                LazyVGrid(
-                    columns: fixedAlbumGridColumns(for: metrics),
-                    alignment: .leading,
-                    spacing: FixedCoverGridLayout.rowSpacing
-                ) {
-                    ForEach(albums) { album in
-                        AlbumCoverCard(
-                            album: album,
-                            appModel: appModel,
-                            displayAlbumName: appModel.displayAlbumName(for: album),
-                            displayArtistName: appModel.displayArtistName(for: album),
-                            hasEnhancedAlbumName: appModel.hasEnhancedAlbumName(for: album),
-                            albumNameEnhancementState: appModel.albumNameEnhancementState(forAlbumID: album.id),
-                            coverWriteMessage: appModel.coverWriteMessage(for: album.id),
-                            isSelectionEnabled: filter == .singleFileUnsplit,
-                            isSelectionMode: isUnsplitSelectionMode,
-                            isSelected: unsplitSelection.selectedAlbumIDs.contains(album.id)
-                        ) {
-                            if isUnsplitSelectionMode, filter == .singleFileUnsplit {
-                                unsplitSelection.toggle(album.id)
-                            } else {
-                                openAlbumDetail(albumID: album.id, pendingCoverURL: nil)
-                            }
-                        } onAcceptedCoverDrop: {
-                            openAlbumDetail(albumID: album.id, pendingCoverURL: nil)
-                        } onToggleSelection: {
-                            isUnsplitSelectionMode = true
-                            unsplitSelection.toggle(album.id)
-                        } onSelectAllUnsplit: {
-                            isUnsplitSelectionMode = true
-                            unsplitSelection.selectAllSplitCandidates(in: albums)
-                        } onSplitWithXLD: {
-                            let selectedIDs = unsplitSelection.selectedAlbumIDs
-                            splitUnsplitAlbumsWithXLD(
-                                selectedIDs.contains(album.id) && !selectedIDs.isEmpty ? selectedIDs : Set([album.id])
-                            )
-                        }
-                    }
-                }
-                .padding(.horizontal, FixedCoverGridLayout.horizontalContentPadding)
-                .padding(.top, FixedCoverGridLayout.rowSpacing)
-                .padding(.bottom, 96)
-            }
-        }
-        .frame(minHeight: 320, maxHeight: .infinity)
-    }
-
-    private func fixedAlbumGridColumns(
-        for metrics: FixedCoverGridLayout.Metrics
-    ) -> [GridItem] {
-        Array(
-            repeating: GridItem(
-                .fixed(FixedCoverGridLayout.cardWidth),
-                spacing: metrics.columnSpacing
-            ),
-            count: metrics.columnCount
+    private func albumGrid(snapshot: AlbumCoverWallSnapshot) -> some View {
+        let renderKey = AlbumCoverWallRenderKey(
+            snapshotRevision: snapshot.revision,
+            filter: filter,
+            normalizedQuery: snapshot.normalizedQuery,
+            selectedAlbumIDs: unsplitSelection.selectedAlbumIDs,
+            coverWriteMessages: appModel.coverWriteMessagesByAlbumID,
+            splittingAlbumIDs: appModel.splittingCueSheetAlbumIDs,
+            isSelectionMode: isUnsplitSelectionMode
         )
+        return EquatableAlbumCoverGrid(
+            snapshot: snapshot,
+            renderKey: renderKey,
+            appModel: appModel,
+            onOpen: { albumID in
+                if isUnsplitSelectionMode, filter == .singleFileUnsplit {
+                    unsplitSelection.toggle(albumID)
+                } else {
+                    openAlbumDetail(albumID: albumID, pendingCoverURL: nil)
+                }
+            },
+            onAcceptedCoverDrop: { albumID in
+                openAlbumDetail(albumID: albumID, pendingCoverURL: nil)
+            },
+            onToggleSelection: { albumID in
+                isUnsplitSelectionMode = true
+                unsplitSelection.toggle(albumID)
+            },
+            onSelectAllUnsplit: {
+                isUnsplitSelectionMode = true
+                unsplitSelection.clear()
+                for card in snapshot.cards where card.canSplitWithXLD {
+                    unsplitSelection.select(card.id)
+                }
+            },
+            onSplitWithXLD: { albumID in
+                let selectedIDs = unsplitSelection.selectedAlbumIDs
+                splitUnsplitAlbumsWithXLD(
+                    selectedIDs.contains(albumID) && !selectedIDs.isEmpty ? selectedIDs : Set([albumID])
+                )
+            }
+        )
+        .equatable()
     }
 
     private func looseAudioList(paths: [String]) -> some View {
@@ -650,22 +613,28 @@ struct LibraryScanSummaryView: View {
         albumID: AlbumScanRecord.ID,
         pendingCoverURL: URL?
     ) {
+        let performanceSpan = CoverDropPerformanceLog.begin(
+            CoverDropPerformanceOperation.openAlbumDetail,
+            context: ["albumID": albumID]
+        )
         selectedAlbumID = albumID
-        if let pendingCoverURL {
-            appModel.stageCoverImage(pendingCoverURL, forAlbumID: albumID)
-        } else {
-            appModel.cancelPendingCoverImage(forAlbumID: albumID)
-        }
+        appModel.stageCoverImageIfProvided(pendingCoverURL, forAlbumID: albumID)
         withAnimation(detailTransitionAnimation) {
             isShowingAlbumDetail = true
         }
+        performanceSpan?.finish()
     }
 
     private func closeAlbumDetail() {
+        let performanceSpan = CoverDropPerformanceLog.begin(
+            CoverDropPerformanceOperation.returnToCoverWall,
+            context: ["albumID": selectedAlbumID ?? "unknown"]
+        )
         withAnimation(detailTransitionAnimation) {
             isShowingAlbumDetail = false
         }
         clearSelectedAlbumDetail()
+        performanceSpan?.finish()
     }
 
     private func clearSelectedAlbumDetail() {
@@ -690,6 +659,73 @@ struct LibraryScanSummaryView: View {
                 await appModel.splitCueSheetWithXLD(albumID: target.0, cueSheetID: target.1)
             }
         }
+    }
+}
+
+private struct EquatableAlbumCoverGrid: View, Equatable {
+    let snapshot: AlbumCoverWallSnapshot
+    let renderKey: AlbumCoverWallRenderKey
+    let appModel: AppModel
+    let onOpen: (AlbumScanRecord.ID) -> Void
+    let onAcceptedCoverDrop: (AlbumScanRecord.ID) -> Void
+    let onToggleSelection: (AlbumScanRecord.ID) -> Void
+    let onSelectAllUnsplit: () -> Void
+    let onSplitWithXLD: (AlbumScanRecord.ID) -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.snapshot == rhs.snapshot
+            && lhs.renderKey == rhs.renderKey
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let contentWidth = max(
+                0,
+                proxy.size.width - 2 * FixedCoverGridLayout.horizontalContentPadding
+            )
+            let metrics = FixedCoverGridLayout.metrics(forContentWidth: contentWidth)
+
+            ScrollView {
+                LazyVGrid(
+                    columns: fixedColumns(for: metrics),
+                    alignment: .leading,
+                    spacing: FixedCoverGridLayout.rowSpacing
+                ) {
+                    ForEach(snapshot.cards) { presentation in
+                        AlbumCoverCard(
+                            presentation: presentation,
+                            appModel: appModel,
+                            coverWriteMessage: renderKey.coverWriteMessages[presentation.id],
+                            isSelectionEnabled: renderKey.filter == .singleFileUnsplit,
+                            isSelectionMode: renderKey.isSelectionMode,
+                            isSelected: renderKey.selectedAlbumIDs.contains(presentation.id),
+                            isSplittingCueSheet: renderKey.splittingAlbumIDs.contains(presentation.id),
+                            onOpen: { onOpen(presentation.id) },
+                            onAcceptedCoverDrop: { onAcceptedCoverDrop(presentation.id) },
+                            onToggleSelection: { onToggleSelection(presentation.id) },
+                            onSelectAllUnsplit: onSelectAllUnsplit,
+                            onSplitWithXLD: { onSplitWithXLD(presentation.id) }
+                        )
+                    }
+                }
+                .padding(.horizontal, FixedCoverGridLayout.horizontalContentPadding)
+                .padding(.top, FixedCoverGridLayout.rowSpacing)
+                .padding(.bottom, 96)
+            }
+        }
+        .frame(minHeight: 320, maxHeight: .infinity)
+    }
+
+    private func fixedColumns(
+        for metrics: FixedCoverGridLayout.Metrics
+    ) -> [GridItem] {
+        Array(
+            repeating: GridItem(
+                .fixed(FixedCoverGridLayout.cardWidth),
+                spacing: metrics.columnSpacing
+            ),
+            count: metrics.columnCount
+        )
     }
 }
 
@@ -763,16 +799,13 @@ private struct LiquidGlassFilterBarBackground: View {
 }
 
 private struct AlbumCoverCard: View {
-    let album: AlbumScanRecord
+    let presentation: AlbumCoverCardPresentation
     let appModel: AppModel
-    let displayAlbumName: String
-    let displayArtistName: String
-    let hasEnhancedAlbumName: Bool
-    let albumNameEnhancementState: AlbumNameEnhancementAlbumState?
     let coverWriteMessage: String?
     let isSelectionEnabled: Bool
     let isSelectionMode: Bool
     let isSelected: Bool
+    let isSplittingCueSheet: Bool
     let onOpen: () -> Void
     let onAcceptedCoverDrop: () -> Void
     let onToggleSelection: () -> Void
@@ -789,20 +822,20 @@ private struct AlbumCoverCard: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
-                        Text(displayAlbumName)
+                        Text(presentation.displayAlbumName)
                             .font(.system(size: 12, weight: .semibold))
                             .foregroundStyle(LibraryHomeDesignToken.textPrimary)
                             .lineLimit(2)
-                            .help(displayAlbumName)
+                            .help(presentation.displayAlbumName)
 
-                        if hasEnhancedAlbumName {
+                        if presentation.hasEnhancedName {
                             Image(systemName: "sparkles")
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(LibraryHomeDesignToken.textTertiary)
                                 .help("名称已由 Ollama 增强")
                         }
 
-                        if let message = albumNameEnhancementState?.lastErrorMessage {
+                        if let message = presentation.enhancementErrorMessage {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .font(.caption2.weight(.semibold))
                                 .foregroundStyle(LibraryHomeDesignToken.warning)
@@ -810,21 +843,21 @@ private struct AlbumCoverCard: View {
                         }
                     }
 
-                    Text(displayArtistName)
+                    Text(presentation.displayArtistName)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(LibraryHomeDesignToken.textSecondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
 
-                    Text(album.folderURL.path)
+                    Text(presentation.folderURL.path)
                         .font(.system(size: 10))
                         .foregroundStyle(LibraryHomeDesignToken.textTertiary)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .help(album.folderURL.path)
+                        .help(presentation.folderURL.path)
 
                     HStack(spacing: 5) {
-                        ForEach(formatTags, id: \.self) { tag in
+                        ForEach(presentation.formatTags, id: \.self) { tag in
                             Text(tag)
                                 .font(.system(size: 10, weight: .semibold))
                                 .foregroundStyle(LibraryHomeDesignToken.textTertiary)
@@ -891,7 +924,7 @@ private struct AlbumCoverCard: View {
                 } label: {
                     Label("用 XLD 分轨", systemImage: "waveform")
                 }
-                .disabled(!UnsplitAlbumSelection.canSplitWithXLD(album) || appModel.isSplittingCueSheet(album.id))
+                .disabled(!presentation.canSplitWithXLD || isSplittingCueSheet)
             }
         }
         .onDrop(
@@ -900,7 +933,7 @@ private struct AlbumCoverCard: View {
         ) { providers in
             CoverDropReceiver.receive(
                 providers,
-                albumID: album.id,
+                albumID: presentation.id,
                 appModel: appModel,
                 onAccepted: onAcceptedCoverDrop
             )
@@ -910,7 +943,8 @@ private struct AlbumCoverCard: View {
     private var coverArea: some View {
         ZStack {
             CachedCoverFillView(
-                url: displayedCoverURL,
+                url: presentation.coverURL,
+                contentRevision: presentation.contentRevision,
                 maxPixelSize: 336,
                 placeholderSize: 32,
                 placeholderText: "缺封面"
@@ -943,7 +977,7 @@ private struct AlbumCoverCard: View {
             }
         }
         .overlay(alignment: .bottomTrailing) {
-            if album.needsAttention {
+            if presentation.needsAttention {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(LibraryHomeDesignToken.textPrimary)
@@ -951,17 +985,13 @@ private struct AlbumCoverCard: View {
                     .background(LibraryHomeDesignToken.warning, in: Circle())
                     .shadow(color: LibraryHomeDesignToken.shadowCard, radius: 4, y: 2)
                     .padding(8)
-                    .help(album.issues.map(\.displayName).joined(separator: "\n"))
+                    .help(presentation.issueHelp ?? "")
             }
         }
     }
 
-    private var displayedCoverURL: URL? {
-        album.displayedCover?.displayURL
-    }
-
     private var statusBadge: some View {
-        if album.needsAttention {
+        if presentation.needsAttention {
             LibraryStatusPill(
                 title: "需确认",
                 systemImage: "exclamationmark.triangle.fill",
@@ -969,7 +999,7 @@ private struct AlbumCoverCard: View {
                 background: LibraryHomeDesignToken.warningBg,
                 border: LibraryHomeDesignToken.warning.opacity(0.35)
             )
-        } else if let source = album.displayedCover?.source.displayName {
+        } else if let source = presentation.coverSourceName {
             LibraryStatusPill(
                 title: source,
                 systemImage: "checkmark",
@@ -991,13 +1021,6 @@ private struct AlbumCoverCard: View {
     private var cardBackground: Color {
         isHovered ? LibraryHomeDesignToken.bgElevated : LibraryHomeDesignToken.bgTertiary
     }
-
-    private var formatTags: [String] {
-        Array(Set(album.audioFiles.map { $0.format.uppercased() }))
-            .sorted()
-            .prefix(2)
-            .map { $0 }
-    }
 }
 
 private struct AlbumDetailSheet: View {
@@ -1005,7 +1028,7 @@ private struct AlbumDetailSheet: View {
     @ObservedObject var appModel: AppModel
     let onClose: () -> Void
     @State private var isDropTargeted = false
-    @State private var isShowingCoverSearch = false
+    @State private var workflowPresentation = AlbumCoverWorkflowPresentationState()
     @State private var selectedSearchSourceID = ""
     @State private var isAlbumRemoved = false
 
@@ -1018,14 +1041,13 @@ private struct AlbumDetailSheet: View {
     }
 
     var body: some View {
-        Group {
-            if isAlbumRemoved || album == nil {
-                removedAlbumState
-            } else if let album {
-                albumDetail(album)
-            }
+        ZStack {
+            workflowContent
         }
-        .frame(width: 680, height: 520)
+        .frame(
+            width: workflowPresentation.containerSize.width,
+            height: workflowPresentation.containerSize.height
+        )
         .background(LibraryHomeDesignToken.bgSecondary)
         .clipShape(RoundedRectangle(cornerRadius: LibraryHomeDesignToken.radiusLg))
         .shadow(color: LibraryHomeDesignToken.shadowElevated, radius: 24, y: 10)
@@ -1036,53 +1058,75 @@ private struct AlbumDetailSheet: View {
         .overlay {
             RoundedRectangle(cornerRadius: 12)
                 .stroke(
-                    isDropTargeted ? AnyShapeStyle(LibraryHomeDesignToken.accent) : AnyShapeStyle(.clear),
+                    isDropTargeted && workflowPresentation.usesAlbumDetailDropZone
+                        ? AnyShapeStyle(LibraryHomeDesignToken.accent)
+                        : AnyShapeStyle(.clear),
                     style: StrokeStyle(lineWidth: 3, dash: [8])
                 )
                 .padding(8)
                 .allowsHitTesting(false)
-        }
-        .sheet(isPresented: $isShowingCoverSearch) {
-            if !isAlbumRemoved, let album {
-                CoverSearchSheet(
-                    album: album,
-                    appModel: appModel,
-                    searchConfiguration: coverSearchConfiguration,
-                    selectedSourceID: $selectedSearchSourceID
-                )
-            }
         }
         .onAppear {
             DispatchQueue.main.async {
                 if selectedSearchSourceID.isEmpty {
                     selectedSearchSourceID = coverSearchConfiguration.defaultSource.id
                 }
-                checkAlbumRemoval()
+                Task {
+                    await checkAlbumRemoval()
+                }
             }
         }
         .task(id: albumID) {
             while !Task.isCancelled && !isAlbumRemoved {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard !Task.isCancelled else { return }
-                checkAlbumRemoval()
+                await checkAlbumRemoval()
             }
         }
         .onChange(of: album == nil) { _, isMissing in
             if isMissing {
                 isAlbumRemoved = true
-                isShowingCoverSearch = false
+                workflowPresentation.handleAlbumRemoval()
             }
         }
-        .onDrop(
-            of: CoverDropReceiver.typeIdentifiers,
-            isTargeted: $isDropTargeted
-        ) { providers in
-            guard !isAlbumRemoved else { return false }
-            return CoverDropReceiver.receive(
-                providers,
-                albumID: albumID,
-                appModel: appModel
-            )
+    }
+
+    @ViewBuilder
+    private var workflowContent: some View {
+        switch workflowPresentation.destination {
+        case .albumDetail:
+            if isAlbumRemoved || album == nil {
+                removedAlbumState
+            } else if let album {
+                albumDetail(album)
+                    .onDrop(
+                        of: CoverDropReceiver.typeIdentifiers,
+                        isTargeted: $isDropTargeted
+                    ) { providers in
+                        guard workflowPresentation.usesAlbumDetailDropZone else {
+                            return false
+                        }
+                        return CoverDropReceiver.receive(
+                            providers,
+                            albumID: albumID,
+                            appModel: appModel
+                        )
+                    }
+            }
+        case .coverSearch:
+            if !isAlbumRemoved, let album {
+                CoverSearchSheet(
+                    album: album,
+                    appModel: appModel,
+                    searchConfiguration: coverSearchConfiguration,
+                    selectedSourceID: $selectedSearchSourceID,
+                    onClose: {
+                        workflowPresentation.showAlbumDetail()
+                    }
+                )
+            } else {
+                removedAlbumState
+            }
         }
     }
 
@@ -1168,7 +1212,15 @@ private struct AlbumDetailSheet: View {
                                 Spacer(minLength: 0)
 
                                 Button {
-                                    isShowingCoverSearch = true
+                                    let performanceSpan = CoverDropPerformanceLog.begin(
+                                        CoverDropPerformanceOperation.openAggregateSearch,
+                                        context: [
+                                            "albumID": album.id,
+                                            "source": selectedSearchSourceID
+                                        ]
+                                    )
+                                    workflowPresentation.showCoverSearch()
+                                    performanceSpan?.finish()
                                 } label: {
                                     Label("搜索封面", systemImage: "magnifyingglass")
                                 }
@@ -1475,11 +1527,11 @@ private struct AlbumDetailSheet: View {
         }
     }
 
-    private func checkAlbumRemoval() {
+    private func checkAlbumRemoval() async {
         guard !isAlbumRemoved else { return }
-        if appModel.removeAlbumIfFolderMissing(albumID: albumID) || album == nil {
+        if await appModel.removeAlbumIfFolderMissing(albumID: albumID) || album == nil {
             isAlbumRemoved = true
-            isShowingCoverSearch = false
+            workflowPresentation.handleAlbumRemoval()
         }
     }
 
@@ -1577,7 +1629,7 @@ private struct CoverSearchSheet: View {
     @ObservedObject var appModel: AppModel
     let searchConfiguration: AppConfiguration.CoverSearch
     @Binding var selectedSourceID: AppConfiguration.CoverSearchSource.ID
-    @Environment(\.dismiss) private var dismiss
+    let onClose: () -> Void
     @State private var isDropTargeted = false
     @State private var webLoadErrorMessage: String?
     @State private var capturedWebImageURL: URL?
@@ -1588,8 +1640,6 @@ private struct CoverSearchSheet: View {
     @State private var isLoadingAggregateSearch = false
     @State private var aggregateReloadID = UUID()
     @State private var selectedAggregateCountryCode = "CN"
-
-    private let sheetSize = CGSize(width: 1100, height: 700)
 
     private var keyword: String {
         appModel.searchKeyword(for: album)
@@ -1620,7 +1670,7 @@ private struct CoverSearchSheet: View {
             sidePanel
                 .frame(width: 320)
         }
-        .frame(width: sheetSize.width, height: sheetSize.height)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(LibraryHomeDesignToken.bgPrimary)
         .onAppear {
             DispatchQueue.main.async {
@@ -1796,6 +1846,7 @@ private struct CoverSearchSheet: View {
                         result: result,
                         onDragStarted: { imageURL in
                             cacheCapturedWebImage(imageURL)
+                            appModel.prefetchRemoteCoverImage(at: imageURL)
                         }
                     )
                 }
@@ -1891,14 +1942,14 @@ private struct CoverSearchSheet: View {
 
             HStack {
                 Button("关闭") {
-                    dismiss()
+                    onClose()
                 }
                 .buttonStyle(.coverDropSubtle)
 
                 Spacer()
 
                 Button {
-                    dismiss()
+                    onClose()
                 } label: {
                     Label("返回详情保存", systemImage: "arrow.left")
                 }
@@ -2056,7 +2107,7 @@ private struct CoverSearchSheet: View {
                     albumID: album.id,
                     appModel: appModel,
                     fallbackRemoteURL: fallbackRemoteURL,
-                    onAccepted: { dismiss() }
+                    onAccepted: onClose
                 )
                 if didAccept {
                     clearCapturedWebImage()
@@ -2147,7 +2198,7 @@ private struct CoverSearchSheet: View {
 
         guard panel.runModal() == .OK, let url = panel.url else { return }
         appModel.stageCoverImage(url, forAlbumID: album.id)
-        dismiss()
+        onClose()
     }
 
     private func cacheCapturedWebImage(_ imageURL: URL) {
@@ -2177,10 +2228,19 @@ private struct CoverSearchSheet: View {
         guard selectedSource.kind == .aggregate else { return }
 
         let trimmedKeyword = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        let performanceSpan = CoverDropPerformanceLog.begin(
+            CoverDropPerformanceOperation.aggregateSearchRequest,
+            context: [
+                "albumID": album.id,
+                "country": selectedAggregateCountryCode,
+                "keywordLength": "\(trimmedKeyword.count)"
+            ]
+        )
         guard !trimmedKeyword.isEmpty else {
             aggregateResults = []
             aggregateSearchErrorMessage = "搜索词为空，无法执行聚合搜索。"
             isLoadingAggregateSearch = false
+            performanceSpan?.finish(outcome: .failure, context: ["error": "empty_keyword"])
             return
         }
 
@@ -2194,15 +2254,26 @@ private struct CoverSearchSheet: View {
                 parameters: parameters
             )
 
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                performanceSpan?.finish(outcome: .cancelled)
+                return
+            }
             aggregateResults = results
             aggregateSearchErrorMessage = nil
             isLoadingAggregateSearch = false
+            performanceSpan?.finish(context: ["resultCount": "\(results.count)"])
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled else {
+                performanceSpan?.finish(outcome: .cancelled)
+                return
+            }
             aggregateResults = []
             aggregateSearchErrorMessage = displayMessage(for: error)
             isLoadingAggregateSearch = false
+            performanceSpan?.finish(
+                outcome: .failure,
+                context: ["error": error.localizedDescription]
+            )
         }
     }
 
@@ -2485,9 +2556,20 @@ enum CoverDropReceiver {
         appModel: AppModel,
         acceptanceHandler: AcceptanceHandlerBox
     ) {
+        let performanceSpan = CoverDropPerformanceLog.begin(
+            CoverDropPerformanceOperation.readDroppedImage,
+            context: [
+                "albumID": albumID,
+                "representation": representation.typeIdentifier
+            ]
+        )
         CoverDropDebugLog.write("封面拖拽：尝试 URL representation：\(representation.typeIdentifier)")
         representation.provider.value.loadItem(forTypeIdentifier: representation.typeIdentifier, options: nil) { item, error in
             if let error {
+                performanceSpan?.finish(
+                    outcome: performanceOutcome(for: error),
+                    context: ["error": error.localizedDescription]
+                )
                 CoverDropDebugLog.write(
                     "封面拖拽：读取 URL representation 失败，type=\(representation.typeIdentifier)，\(debugDescription(for: error))"
                 )
@@ -2543,6 +2625,10 @@ enum CoverDropReceiver {
             }
 
             guard let url = droppedURL(from: item) else {
+                performanceSpan?.finish(
+                    outcome: .failure,
+                    context: ["error": "unrecognized_item"]
+                )
                 CoverDropDebugLog.write(
                     "封面拖拽：URL representation 返回了无法识别的对象，type=\(representation.typeIdentifier)，对象类型=\(String(describing: item.map { Swift.type(of: $0) }))"
                 )
@@ -2585,6 +2671,9 @@ enum CoverDropReceiver {
             CoverDropDebugLog.write(
                 "封面拖拽：URL representation 读取成功，type=\(representation.typeIdentifier)，URL=\(url.absoluteString)"
             )
+            performanceSpan?.finish(
+                context: ["kind": url.isFileURL ? "file" : "remote"]
+            )
             Task { @MainActor in
                 let didStage = await appModel.stageDroppedCoverURL(url, forAlbumID: albumID)
                 if didStage {
@@ -2619,7 +2708,7 @@ enum CoverDropReceiver {
         }
     }
 
-    private static func loadImageData(
+    nonisolated private static func loadImageData(
         from provider: NSItemProvider,
         typeIdentifier: String,
         urlRepresentations: [URLItemRepresentation],
@@ -2628,9 +2717,21 @@ enum CoverDropReceiver {
         appModel: AppModel,
         acceptanceHandler: AcceptanceHandlerBox
     ) {
+        let performanceSpan = CoverDropPerformanceLog.begin(
+            CoverDropPerformanceOperation.readDroppedImage,
+            context: [
+                "albumID": albumID,
+                "representation": typeIdentifier
+            ]
+        )
         CoverDropDebugLog.write("封面拖拽：开始读取图片数据 representation：\(typeIdentifier)")
+        let sendableProvider = SendableItemProvider(value: provider)
         provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, error in
             if let error {
+                performanceSpan?.finish(
+                    outcome: performanceOutcome(for: error),
+                    context: ["error": error.localizedDescription]
+                )
                 CoverDropDebugLog.write(
                     "封面拖拽：读取图片数据 representation 失败，type=\(typeIdentifier)，\(debugDescription(for: error))"
                 )
@@ -2655,7 +2756,7 @@ enum CoverDropReceiver {
                 }
 
                 let fallbackURLRepresentations = urlRepresentations.isEmpty
-                    ? speculativeURLRepresentations(in: provider)
+                    ? speculativeURLRepresentations(in: sendableProvider.value)
                     : urlRepresentations
                 if loadFirstURLIfAvailable(
                     from: fallbackURLRepresentations[...],
@@ -2687,9 +2788,13 @@ enum CoverDropReceiver {
             }
 
             guard let data else {
+                performanceSpan?.finish(
+                    outcome: .failure,
+                    context: ["error": "empty_data"]
+                )
                 CoverDropDebugLog.write("封面拖拽：图片数据 representation 成功回调但 data 为 nil，type=\(typeIdentifier)")
                 let fallbackURLRepresentations = urlRepresentations.isEmpty
-                    ? speculativeURLRepresentations(in: provider)
+                    ? speculativeURLRepresentations(in: sendableProvider.value)
                     : urlRepresentations
                 if loadFirstURLIfAvailable(
                     from: fallbackURLRepresentations[...],
@@ -2721,6 +2826,7 @@ enum CoverDropReceiver {
             }
 
             CoverDropDebugLog.write("封面拖拽：图片数据 representation 读取成功，type=\(typeIdentifier)，大小=\(data.count) bytes")
+            performanceSpan?.finish(context: ["bytes": "\(data.count)"])
             Task { @MainActor in
                 let didStage = await appModel.stageCoverImageData(
                     data,
@@ -2770,7 +2876,7 @@ enum CoverDropReceiver {
         return true
     }
 
-    private static func loadImageFallbackIfAvailable(
+    nonisolated private static func loadImageFallbackIfAvailable(
         _ imageFallback: ImageDataRepresentation?,
         albumID: AlbumScanRecord.ID,
         appModel: AppModel,
@@ -2790,7 +2896,7 @@ enum CoverDropReceiver {
         return true
     }
 
-    private static func loadFallbackRemoteURLIfAvailable(
+    nonisolated private static func loadFallbackRemoteURLIfAvailable(
         _ fallbackRemoteURL: URL?,
         albumID: AlbumScanRecord.ID,
         appModel: AppModel,
@@ -2813,7 +2919,7 @@ enum CoverDropReceiver {
         return true
     }
 
-    private static func urlRepresentations(in provider: NSItemProvider) -> [URLItemRepresentation] {
+    nonisolated private static func urlRepresentations(in provider: NSItemProvider) -> [URLItemRepresentation] {
         let sendableProvider = SendableItemProvider(value: provider)
         return urlTypeIdentifiers
             .filter { provider.hasItemConformingToTypeIdentifier($0) }
@@ -2867,6 +2973,12 @@ enum CoverDropReceiver {
     nonisolated private static func debugDescription(for error: Error) -> String {
         let nsError = error as NSError
         return debugDescription(for: nsError, depth: 0)
+    }
+
+    nonisolated private static func performanceOutcome(
+        for error: Error
+    ) -> CoverDropPerformanceOutcome {
+        (error as NSError).code == NSUserCancelledError ? .cancelled : .failure
     }
 
     nonisolated private static func debugDescription(for error: NSError, depth: Int) -> String {
@@ -3094,6 +3206,7 @@ private struct CoverSearchWebView: NSViewRepresentable {
 
 private struct CachedCoverFillView: View {
     let url: URL?
+    var contentRevision: UInt64 = 0
     let maxPixelSize: CGFloat
     let placeholderSize: CGFloat
     let placeholderText: String?
@@ -3101,7 +3214,7 @@ private struct CachedCoverFillView: View {
     @State private var image: NSImage?
 
     private var thumbnailRequestKey: String {
-        "\(url?.standardizedFileURL.path ?? "empty")@\(Int(maxPixelSize))"
+        "\(url?.standardizedFileURL.path ?? "empty")|\(contentRevision)@\(Int(maxPixelSize))"
     }
 
     var body: some View {
@@ -3138,24 +3251,24 @@ private struct CachedCoverFillView: View {
         }
 
         image = nil
-        let maxPixelSize = maxPixelSize
-        let loaded = await Task.detached(priority: .utility) { () -> (identity: String, image: NSImage?) in
-            let identity = CoverPreviewCache.thumbnailIdentity(for: url, maxPixelSize: maxPixelSize)
-            let image = CoverPreviewCache.cachedImage(for: url, maxPixelSize: maxPixelSize)
-            return (identity: identity, image: image)
-        }.value
+        let request = CoverThumbnailLoader.Request(
+            url: url,
+            maxPixelSize: maxPixelSize,
+            contentRevision: contentRevision
+        )
+        let loaded = await CoverThumbnailLoader.shared.image(for: request)
 
         guard !Task.isCancelled,
               requestKey == thumbnailRequestKey else {
             return
         }
-        _ = loaded.identity
-        image = loaded.image
+        image = loaded?.image
     }
 }
 
 private struct CachedAlbumCoverPreview: View {
     let url: URL?
+    var contentRevision: UInt64 = 0
     let maxPixelSize: CGFloat
     let placeholderSize: CGFloat
     let cornerRadius: CGFloat
@@ -3163,7 +3276,7 @@ private struct CachedAlbumCoverPreview: View {
     @State private var image: NSImage?
 
     private var thumbnailRequestKey: String {
-        "\(url?.standardizedFileURL.path ?? "empty")@\(Int(maxPixelSize))"
+        "\(url?.standardizedFileURL.path ?? "empty")|\(contentRevision)@\(Int(maxPixelSize))"
     }
 
     var body: some View {
@@ -3185,19 +3298,18 @@ private struct CachedAlbumCoverPreview: View {
         }
 
         image = nil
-        let maxPixelSize = maxPixelSize
-        let loaded = await Task.detached(priority: .utility) { () -> (identity: String, image: NSImage?) in
-            let identity = CoverPreviewCache.thumbnailIdentity(for: url, maxPixelSize: maxPixelSize)
-            let image = CoverPreviewCache.cachedImage(for: url, maxPixelSize: maxPixelSize)
-            return (identity: identity, image: image)
-        }.value
+        let request = CoverThumbnailLoader.Request(
+            url: url,
+            maxPixelSize: maxPixelSize,
+            contentRevision: contentRevision
+        )
+        let loaded = await CoverThumbnailLoader.shared.image(for: request)
 
         guard !Task.isCancelled,
               requestKey == thumbnailRequestKey else {
             return
         }
-        _ = loaded.identity
-        image = loaded.image
+        image = loaded?.image
     }
 }
 

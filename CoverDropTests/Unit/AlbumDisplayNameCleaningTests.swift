@@ -157,6 +157,36 @@ struct AlbumDisplayNameCleaningTests {
         #expect(names.albumName == "I...Do")
     }
 
+    @Test("大量重复标签不会按曲目反复执行名称清洗")
+    func repeatedMetadataValuesStayWithinWallBuildBudget() {
+        let repeatedMetadata = Array(
+            repeating: makeMetadata(
+                album: "I DO",
+                artist: "S.H.E",
+                albumArtist: "S.H.E"
+            ),
+            count: 5_000
+        )
+        let album = makeAlbum(
+            artist: "SHE合集【qobuz】",
+            album: "2005-I...Do",
+            hasCover: true,
+            audioMetadata: repeatedMetadata
+        )
+
+        let startedAt = Date()
+        let names = AlbumDisplayNameCleaning.displayNames(
+            for: album,
+            artistName: album.artistName,
+            albumName: album.albumName
+        )
+        let elapsed = Date().timeIntervalSince(startedAt)
+
+        #expect(names.artistName == "S.H.E")
+        #expect(names.albumName == "I DO")
+        #expect(elapsed < 0.5, "重复标签展示名计算耗时 \(elapsed) 秒")
+    }
+
     private func makeAlbum(
         artist: String,
         album: String,

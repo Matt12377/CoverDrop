@@ -25,6 +25,34 @@ struct CoverPreviewCacheTests {
         }
     }
 
+    @Test("全量索引 revision 相同时仍按文件身份刷新缩略图")
+    func revisionCacheKeyIncludesFileIdentity() async throws {
+        try await withTemporaryDirectory { root in
+            let imageURL = root.appendingPathComponent("cover.png")
+            try pngData(width: 1, height: 1, color: .red).write(to: imageURL)
+            try setModificationDate(Date(timeIntervalSince1970: 7_000), for: imageURL)
+            CoverPreviewCache.clearMemoryCache()
+
+            let firstImage = try #require(CoverPreviewCache.cachedImage(
+                for: imageURL,
+                maxPixelSize: 336,
+                contentRevision: 1
+            ))
+
+            try pngData(width: 4, height: 4, color: .blue).write(to: imageURL)
+            try setModificationDate(Date(timeIntervalSince1970: 8_000), for: imageURL)
+            let secondImage = try #require(CoverPreviewCache.cachedImage(
+                for: imageURL,
+                maxPixelSize: 336,
+                contentRevision: 1
+            ))
+
+            #expect(firstImage !== secondImage)
+            #expect(secondImage.size.width == 4)
+            #expect(secondImage.size.height == 4)
+        }
+    }
+
     @Test("同一路径图片变化后预览 URL 缓存会重新生成")
     func cachedPreviewURLChangesWhenFileIdentityChanges() async throws {
         try await withTemporaryDirectory { root in

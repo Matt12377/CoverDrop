@@ -1,6 +1,6 @@
 import Foundation
 
 protocol FolderAccessing: Sendable {
-    func makeBookmark(for url: URL) throws -> Data
-    func resolveBookmark(_ data: Data) throws -> URL
+    nonisolated func makeBookmark(for url: URL) throws -> Data
+    nonisolated func resolveBookmark(_ data: Data) throws -> URL
 }

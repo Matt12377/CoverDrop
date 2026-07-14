@@ -1,7 +1,7 @@
 import Foundation
 
 struct SecurityScopedFolderAccess: FolderAccessing {
-    func makeBookmark(for url: URL) throws -> Data {
+    nonisolated func makeBookmark(for url: URL) throws -> Data {
         try url.bookmarkData(
             options: [.withSecurityScope],
             includingResourceValuesForKeys: [.isDirectoryKey],
@@ -9,7 +9,7 @@ struct SecurityScopedFolderAccess: FolderAccessing {
         )
     }
 
-    func resolveBookmark(_ data: Data) throws -> URL {
+    nonisolated func resolveBookmark(_ data: Data) throws -> URL {
         var isStale = false
         return try URL(
             resolvingBookmarkData: data,

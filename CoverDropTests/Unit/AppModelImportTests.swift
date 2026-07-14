@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import Testing
 @testable import CoverDrop
 
@@ -126,6 +127,98 @@ struct AppModelImportTests {
         #expect(noHitSearch < 0.1, "AppModel 无命中搜索耗时 \(noHitSearch) 秒")
     }
 
+    @Test("AppModel 提供预计算的封面墙卡片快照")
+    func appModelProvidesCoverWallSnapshot() async throws {
+        try await withTemporaryDirectory { root in
+            let first = makeAlbum(
+                folderURL: root.appendingPathComponent("歌手/第一张", isDirectory: true),
+                albumName: "第一张",
+                audioRelativePaths: ["01.flac", "02.wav"]
+            )
+            let second = makeAlbum(
+                folderURL: root.appendingPathComponent("歌手/第二张", isDirectory: true),
+                albumName: "第二张"
+            )
+            let appModel = await makeScannedAppModel(root: root, albums: [first, second])
+
+            let snapshot = appModel.coverWallSnapshotInSelectedLibrary(
+                filter: .all,
+                query: ""
+            )
+
+            #expect(snapshot.cards.map(\.id) == [first.id, second.id])
+            #expect(snapshot.cards.first?.displayAlbumName == "第一张")
+            #expect(snapshot.cards.first?.formatTags == ["FLAC", "WAV"])
+        }
+    }
+
+    @Test("详情和搜索重复读取复用封面墙预计算展示名")
+    func repeatedDetailDisplayNameReadsReusePrecomputedPresentation() async {
+        let root = URL(fileURLWithPath: "/tmp/coverdrop-precomputed-detail-names", isDirectory: true)
+        let folderURL = root.appendingPathComponent("SHE合集/2005-I...Do", isDirectory: true)
+        let metadata = AudioMetadata(
+            title: nil,
+            artist: "S.H.E",
+            albumArtist: "S.H.E",
+            album: "I DO",
+            discNumber: nil,
+            trackNumber: nil,
+            durationSeconds: nil
+        )
+        let album = AlbumScanRecord(
+            folderURL: folderURL,
+            artistName: "SHE合集【qobuz】",
+            albumName: "2005-I...Do",
+            audioFiles: (0..<5_000).map { index in
+                AudioFileRecord(
+                    url: folderURL.appendingPathComponent("\(index).flac"),
+                    relativePath: "\(index).flac",
+                    format: "flac",
+                    metadata: metadata,
+                    readError: nil
+                )
+            },
+            displayedCover: nil,
+            issues: []
+        )
+        let appModel = await makeScannedAppModel(root: root, albums: [album])
+
+        let elapsed = measured {
+            for _ in 0..<20 {
+                #expect(appModel.displayArtistName(for: album) == "S.H.E")
+                #expect(appModel.displayAlbumName(for: album) == "I DO")
+                #expect(appModel.searchKeyword(for: album) == "S.H.E I DO")
+            }
+        }
+
+        #expect(elapsed < 0.1, "重复读取预计算展示名耗时 \(elapsed) 秒")
+    }
+
+    @Test("较早开始的后台索引构建不会覆盖较新的扫描结果")
+    func staleBackgroundDisplayIndexBuildDoesNotOverwriteNewerResult() async {
+        let root = URL(fileURLWithPath: "/tmp/coverdrop-index-generation", isDirectory: true)
+        let appModel = await makeScannedAppModel(root: root, albums: [])
+        let libraryID = appModel.selectedLibraryID!
+        let slowResult = LibraryScanResult(
+            albums: (0..<5_000).map { index in
+                performanceAlbum(index: index, hasCover: false)
+            },
+            looseAudioPaths: []
+        )
+        let latestAlbum = performanceAlbum(index: 99_999, hasCover: true)
+        let latestResult = LibraryScanResult(albums: [latestAlbum], looseAudioPaths: [])
+
+        let slowUpdate = Task {
+            await appModel.setScanResult(slowResult, for: libraryID)
+        }
+        try? await Task.sleep(nanoseconds: 10_000_000)
+        await appModel.setScanResult(latestResult, for: libraryID)
+        _ = await slowUpdate.value
+
+        #expect(appModel.scanResultStats(for: libraryID)?.albumCount == 1)
+        #expect(appModel.albumInSelectedLibrary(id: latestAlbum.id)?.id == latestAlbum.id)
+    }
+
     @Test("扫描器从 AppModel 启动时不占用主线程")
     func scanRunsScannerAwayFromMainThread() async {
         let store = MemoryLibraryStore()
@@ -214,6 +307,59 @@ struct AppModelImportTests {
 
         #expect(appModel.scanResultForSelectedLibrary?.albums.first?.albumName == "New")
         #expect(appModel.shouldShowCoverWallForSelectedLibrary)
+    }
+
+    @Test("重新扫描失败时保留旧结果的名称增强一致性")
+    func failedRescanKeepsExistingNameEnhancementConsistent() async throws {
+        let oldAlbum = makeAlbum(
+            folderURL: URL(fileURLWithPath: "/Volumes/华语/Artist/Old", isDirectory: true),
+            albumName: "原始专辑"
+        )
+        let rescannedAlbum = makeAlbum(
+            folderURL: oldAlbum.folderURL,
+            albumName: "重新扫描专辑"
+        )
+        let scanner = SequencedLibraryScanner(outcomes: [
+            .success(LibraryScanResult(albums: [oldAlbum], looseAudioPaths: [])),
+            .failure("磁盘暂时不可读"),
+            .success(LibraryScanResult(albums: [rescannedAlbum], looseAudioPaths: []))
+        ])
+        let environment = AppEnvironment(
+            libraryStore: MemoryLibraryStore(),
+            folderAccess: StubFolderAccess(),
+            roleProber: StubRoleProber(role: .library),
+            libraryScanner: scanner,
+            coverImageWriter: StubCoverImageWriter(),
+            albumNameSuggesting: StubAlbumNameSuggesting(
+                outcome: .success(AlbumNameSuggestion(
+                    artistName: "增强歌手",
+                    albumName: "增强专辑"
+                ))
+            )
+        )
+        let appModel = AppModel(environment: environment)
+
+        await appModel.prepareImport(url: URL(fileURLWithPath: "/Volumes/华语", isDirectory: true))
+        await appModel.confirmImport(role: .library)
+        await appModel.scanSelectedLibrary()
+        let libraryID = try #require(appModel.selectedLibraryID)
+        appModel.requestAlbumNameEnhancement(forLibraryID: libraryID)
+        await waitForAlbumNameEnhancement(toFinishIn: appModel, libraryID: libraryID)
+
+        await appModel.scanSelectedLibrary()
+
+        let snapshot = appModel.coverWallSnapshotInSelectedLibrary(filter: .all, query: "")
+        #expect(appModel.errorMessage?.contains("磁盘暂时不可读") == true)
+        #expect(appModel.hasEnhancedAlbumName(for: oldAlbum))
+        #expect(appModel.displayArtistName(for: oldAlbum) == "增强歌手")
+        #expect(appModel.displayAlbumName(for: oldAlbum) == "增强专辑")
+        #expect(snapshot.cards.first?.hasEnhancedName == true)
+        #expect(snapshot.cards.first?.displayAlbumName == "增强专辑")
+
+        await appModel.scanSelectedLibrary()
+
+        #expect(appModel.hasEnhancedAlbumName(for: rescannedAlbum) == false)
+        #expect(appModel.displayAlbumName(for: rescannedAlbum) == "重新扫描专辑")
     }
 
     @Test("首次扫描失败时不生成封面墙结果")
@@ -309,6 +455,25 @@ struct AppModelImportTests {
         }
     }
 
+    @Test("预取远程封面不会设置待保存状态")
+    func prefetchingRemoteCoverDoesNotStageImage() {
+        let appModel = AppModel(environment: AppEnvironment(
+            libraryStore: MemoryLibraryStore(),
+            folderAccess: StubFolderAccess(),
+            roleProber: StubRoleProber(role: .library),
+            libraryScanner: StubLibraryScanner(),
+            coverImageWriter: StubCoverImageWriter()
+        ))
+        let album = makeAlbum(
+            folderURL: URL(fileURLWithPath: "/tmp/CoverDrop/Artist/Album", isDirectory: true),
+            albumName: "Album"
+        )
+
+        appModel.prefetchRemoteCoverImage(at: URL(fileURLWithPath: "/tmp/cover.jpg"))
+
+        #expect(appModel.pendingCoverURL(for: album.id) == nil)
+    }
+
     @Test("拖入网页图片数据后会先暂存为本地待保存封面")
     func stagedCoverImageDataCreatesLocalPendingCover() async throws {
         try await withTemporaryDirectory { root in
@@ -352,6 +517,47 @@ struct AppModelImportTests {
         }
     }
 
+    @Test("较早但较慢的拖图任务不会覆盖较新的待保存封面")
+    func staleStagingCompletionDoesNotOverwriteNewerCover() async throws {
+        try await withTemporaryDirectory { root in
+            let albumFolder = root.appendingPathComponent("Artist/Album", isDirectory: true)
+            try FileManager.default.createDirectory(at: albumFolder, withIntermediateDirectories: true)
+            let firstStagedURL = root.appendingPathComponent("first-staged.png")
+            let secondStagedURL = root.appendingPathComponent("second-staged.png")
+            let album = makeAlbum(folderURL: albumFolder, albumName: "Album")
+            let stager = ControlledCoverImageStager()
+            let appModel = await makeScannedAppModel(
+                root: root,
+                albums: [album],
+                coverImageStager: stager
+            )
+
+            let firstRequest = Task {
+                await appModel.stageCoverImageData(
+                    Data([1]),
+                    suggestedExtension: "png",
+                    forAlbumID: album.id
+                )
+            }
+            await stager.waitUntilRequestCount(1)
+            let secondRequest = Task {
+                await appModel.stageCoverImageData(
+                    Data([2]),
+                    suggestedExtension: "png",
+                    forAlbumID: album.id
+                )
+            }
+            await stager.waitUntilRequestCount(2)
+
+            await stager.succeedRequest(at: 1, with: secondStagedURL)
+            #expect(await secondRequest.value)
+            await stager.succeedRequest(at: 0, with: firstStagedURL)
+
+            #expect(!(await firstRequest.value))
+            #expect(appModel.pendingCoverURL(for: album.id) == secondStagedURL)
+        }
+    }
+
     @Test("拖入本地文件 URL 时仍沿用原待保存链路")
     func droppedLocalCoverURLIsStagedDirectly() async throws {
         try await withTemporaryDirectory { root in
@@ -392,6 +598,42 @@ struct AppModelImportTests {
         }
     }
 
+    @Test("取消不存在的待保存封面不会发布状态变化")
+    func cancellingMissingPendingCoverDoesNotPublishChange() async throws {
+        try await withTemporaryDirectory { root in
+            let albumFolder = root.appendingPathComponent("Artist/Album", isDirectory: true)
+            try FileManager.default.createDirectory(at: albumFolder, withIntermediateDirectories: true)
+            let album = makeAlbum(folderURL: albumFolder, albumName: "Album")
+            let appModel = await makeScannedAppModel(root: root, albums: [album])
+            let counter = ObjectWillChangeCounter()
+            let cancellable = appModel.objectWillChange.sink {
+                counter.increment()
+            }
+
+            appModel.cancelPendingCoverImage(forAlbumID: album.id)
+
+            #expect(counter.value == 0)
+            withExtendedLifetime(cancellable) {}
+        }
+    }
+
+    @Test("普通打开详情不会清除已拖入的待保存封面")
+    func openingDetailWithoutNewCoverKeepsPendingCover() async throws {
+        try await withTemporaryDirectory { root in
+            let albumFolder = root.appendingPathComponent("Artist/Album", isDirectory: true)
+            let sourceURL = root.appendingPathComponent("source.png")
+            try FileManager.default.createDirectory(at: albumFolder, withIntermediateDirectories: true)
+            try writeValidPNG(to: sourceURL)
+            let album = makeAlbum(folderURL: albumFolder, albumName: "Album")
+            let appModel = await makeScannedAppModel(root: root, albums: [album])
+            appModel.stageCoverImage(sourceURL, forAlbumID: album.id)
+
+            appModel.stageCoverImageIfProvided(nil, forAlbumID: album.id)
+
+            #expect(appModel.pendingCoverURL(for: album.id) == sourceURL)
+        }
+    }
+
     @Test("点击保存后才生成或替换 cover.jpg")
     func savingStagedCoverWritesCoverJPEG() async throws {
         try await withTemporaryDirectory { root in
@@ -422,6 +664,33 @@ struct AppModelImportTests {
             let previewURL = try #require(refreshedCover.previewURL)
             #expect(refreshedCover.displayURL == previewURL)
             #expect(FileManager.default.fileExists(atPath: previewURL.path))
+        }
+    }
+
+    @Test("保存封面后只增量更新当前专辑的 SQLite 快照封面列")
+    func savingCoverUsesIncrementalSnapshotUpdate() async throws {
+        try await withTemporaryDirectory { root in
+            let albumFolder = root.appendingPathComponent("Artist/Album", isDirectory: true)
+            let sourceURL = root.appendingPathComponent("source.png")
+            try FileManager.default.createDirectory(at: albumFolder, withIntermediateDirectories: true)
+            try writeValidPNG(to: sourceURL)
+            let album = makeAlbum(folderURL: albumFolder, albumName: "Album")
+            let snapshotStore = RecordingScanSnapshotStore(root: root)
+            let appModel = await makeScannedAppModel(
+                root: root,
+                albums: [album],
+                snapshotStore: snapshotStore
+            )
+
+            appModel.stageCoverImage(sourceURL, forAlbumID: album.id)
+            let didWrite = await appModel.savePendingCoverImage(forAlbumID: album.id)
+            await waitUntil { await snapshotStore.coverUpdateCount() == 1 }
+
+            #expect(didWrite)
+            #expect(await snapshotStore.coverUpdateCount() == 1)
+            #expect(await snapshotStore.lastUpdatedAlbumID() == album.id)
+            #expect(await snapshotStore.lastUpdatedCover()?.relativePath == "cover.jpg")
+            #expect(await snapshotStore.replaceCount() == 0)
         }
     }
 
@@ -463,7 +732,7 @@ struct AppModelImportTests {
             let appModel = await makeScannedAppModel(root: root, albums: [removedAlbum, keptAlbum])
 
             try FileManager.default.removeItem(at: removedFolder)
-            let didRemove = appModel.removeAlbumIfFolderMissing(albumID: removedAlbum.id)
+            let didRemove = await appModel.removeAlbumIfFolderMissing(albumID: removedAlbum.id)
 
             #expect(didRemove)
             #expect(appModel.albumInSelectedLibrary(id: removedAlbum.id) == nil)
@@ -480,7 +749,7 @@ struct AppModelImportTests {
             let album = makeAlbum(folderURL: albumFolder, albumName: "Album")
             let appModel = await makeScannedAppModel(root: root, albums: [album])
 
-            let didRemove = appModel.removeAlbumIfFolderMissing(albumID: album.id)
+            let didRemove = await appModel.removeAlbumIfFolderMissing(albumID: album.id)
 
             #expect(!didRemove)
             #expect(appModel.albumInSelectedLibrary(id: album.id) == album)
@@ -500,11 +769,29 @@ struct AppModelImportTests {
 
             appModel.stageCoverImage(sourceURL, forAlbumID: album.id)
             try FileManager.default.removeItem(at: albumFolder)
-            let didRemove = appModel.removeAlbumIfFolderMissing(albumID: album.id)
+            let didRemove = await appModel.removeAlbumIfFolderMissing(albumID: album.id)
 
             #expect(didRemove)
             #expect(appModel.pendingCoverURL(for: album.id) == nil)
         }
+    }
+
+    @Test("专辑目录检查离开主线程")
+    func albumFolderCheckRunsOffMainThread() async {
+        let wasMainThread = await AppModel.runAlbumFolderCheckOffMainActor {
+            Thread.isMainThread
+        }
+
+        #expect(wasMainThread == false)
+    }
+
+    @Test("保存封面同步准备工作离开主线程")
+    func coverWritePreparationRunsOffMainThread() async throws {
+        let wasMainThread = try await AppModel.runCoverWritePreparationOffMainActor {
+            Thread.isMainThread
+        }
+
+        #expect(wasMainThread == false)
     }
 
     @Test("特殊层级专辑保存时 cover.jpg 写入扫描出的专辑根目录")
@@ -566,6 +853,35 @@ struct AppModelImportTests {
             #expect(await writer.writeCount() == 1)
             #expect(!appModel.isSavingCoverImage(for: album.id))
             #expect(appModel.pendingCoverURL(for: album.id) == nil)
+        }
+    }
+
+    @Test("保存旧封面期间新拖入的封面仍保留待保存状态")
+    func newerPendingCoverSurvivesOlderSaveCompletion() async throws {
+        try await withTemporaryDirectory { root in
+            let albumFolder = root.appendingPathComponent("Artist/Album", isDirectory: true)
+            let firstSourceURL = root.appendingPathComponent("first.png")
+            let secondSourceURL = root.appendingPathComponent("second.png")
+            try FileManager.default.createDirectory(at: albumFolder, withIntermediateDirectories: true)
+            try writeValidPNG(to: firstSourceURL)
+            try writeValidPNG(to: secondSourceURL)
+            let album = makeAlbum(folderURL: albumFolder, albumName: "Album")
+            let writer = DelayedCountingCoverImageWriter(delayNanoseconds: 120_000_000)
+            let appModel = await makeScannedAppModel(
+                root: root,
+                albums: [album],
+                coverImageWriter: writer
+            )
+
+            appModel.stageCoverImage(firstSourceURL, forAlbumID: album.id)
+            async let firstSave = appModel.savePendingCoverImage(forAlbumID: album.id)
+            await waitUntil {
+                appModel.isSavingCoverImage(for: album.id)
+            }
+            appModel.stageCoverImage(secondSourceURL, forAlbumID: album.id)
+
+            #expect(await firstSave)
+            #expect(appModel.pendingCoverURL(for: album.id) == secondSourceURL)
         }
     }
 
@@ -1283,6 +1599,7 @@ struct AppModelImportTests {
 
             monitor.emit(rootURL: root, changedPaths: ["Artist/Before/02.wav"])
             await waitUntil { await scanner.rescanCount() == 1 }
+            await waitUntil { await snapshotStore.replaceCount() == 1 }
 
             #expect(await scanner.scanCount() == 1)
             #expect(await scanner.rescanCount() == 1)
@@ -1810,6 +2127,38 @@ private actor DelayedCountingCoverImageWriter: CoverImageWriting {
 
     func writeCount() -> Int {
         count
+    }
+}
+
+private actor ControlledCoverImageStager: CoverImageStaging {
+    private var requestCountValue = 0
+    private var continuations: [Int: CheckedContinuation<URL, any Error>] = [:]
+
+    func stageImageData(
+        _ data: Data,
+        suggestedExtension: String?
+    ) async throws -> URL {
+        let requestIndex = requestCountValue
+        requestCountValue += 1
+        return try await withCheckedThrowingContinuation { continuation in
+            continuations[requestIndex] = continuation
+        }
+    }
+
+    func stageRemoteImage(at remoteURL: URL) async throws -> URL {
+        try await stageImageData(Data(), suggestedExtension: remoteURL.pathExtension)
+    }
+
+    func prefetchRemoteImage(at remoteURL: URL) async {}
+
+    func waitUntilRequestCount(_ expectedCount: Int) async {
+        while requestCountValue < expectedCount {
+            await Task.yield()
+        }
+    }
+
+    func succeedRequest(at index: Int, with url: URL) {
+        continuations.removeValue(forKey: index)?.resume(returning: url)
     }
 }
 
@@ -2486,10 +2835,11 @@ private final class ControllableLibraryChangeMonitor: LibraryChangeMonitoring, @
     }
 }
 
-private actor RecordingScanSnapshotStore: ScanSnapshotStoring {
+private actor RecordingScanSnapshotStore: ScanSnapshotStoring, AlbumCoverSnapshotUpdating {
     private let root: URL
     private var savedSnapshots: [ScanSnapshot] = []
     private var replacedSnapshots: [ScanSnapshot] = []
+    private var coverUpdates: [(albumID: AlbumScanRecord.ID, cover: ScanSnapshot.Cover?)] = []
 
     init(root: URL) {
         self.root = root
@@ -2514,12 +2864,45 @@ private actor RecordingScanSnapshotStore: ScanSnapshotStoring {
         throw RecordingScanSnapshotStoreError()
     }
 
+    func updateAlbumCover(
+        _ cover: ScanSnapshot.Cover?,
+        forAlbumID albumID: AlbumScanRecord.ID,
+        at fileURL: URL,
+        expectedLibrary: LibraryRecord
+    ) async throws -> ScanSnapshotSummary {
+        coverUpdates.append((albumID: albumID, cover: cover))
+        let latestSnapshot = savedSnapshots.last
+        return await MainActor.run {
+            ScanSnapshotSummary(
+                fileURL: fileURL,
+                schemaVersion: ScanSnapshot.currentSchemaVersion,
+                createdAt: .now,
+                libraryDisplayName: expectedLibrary.displayName,
+                libraryRootPath: expectedLibrary.rootPath,
+                libraryRole: expectedLibrary.role,
+                albumCount: latestSnapshot?.scanResult.albums.count ?? 0
+            )
+        }
+    }
+
     func saveCount() -> Int {
         savedSnapshots.count
     }
 
     func replaceCount() -> Int {
         replacedSnapshots.count
+    }
+
+    func coverUpdateCount() -> Int {
+        coverUpdates.count
+    }
+
+    func lastUpdatedAlbumID() -> AlbumScanRecord.ID? {
+        coverUpdates.last?.albumID
+    }
+
+    func lastUpdatedCover() -> ScanSnapshot.Cover? {
+        coverUpdates.last?.cover
     }
 
     private nonisolated func summary(
@@ -2564,6 +2947,21 @@ private actor ScanGate {
     }
 }
 
+private final class ObjectWillChangeCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int {
+        lock.withLock { count }
+    }
+
+    func increment() {
+        lock.withLock {
+            count += 1
+        }
+    }
+}
+
 private func measured(_ block: () -> Void) -> TimeInterval {
     let startedAt = Date()
     block()
@@ -2592,6 +2990,7 @@ private func makeScannedAppModel(
     root: URL,
     albums: [AlbumScanRecord],
     coverImageWriter: any CoverImageWriting = ImageIOCoverImageWriter(),
+    coverImageStager: any CoverImageStaging = LiveCoverImageStager(),
     albumNameSuggesting: any AlbumNameSuggesting = DisabledAlbumNameSuggesting(),
     snapshotStore: any ScanSnapshotStoring = DisabledScanSnapshotStore(),
     albumFolderOpener: any AlbumFolderOpening = DisabledAlbumFolderOpener(),
@@ -2607,6 +3006,7 @@ private func makeScannedAppModel(
             looseAudioPaths: []
         )),
         coverImageWriter: coverImageWriter,
+        coverImageStager: coverImageStager,
         albumNameSuggesting: albumNameSuggesting,
         scanSnapshotStore: snapshotStore,
         albumFolderOpener: albumFolderOpener,
